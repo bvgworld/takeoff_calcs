@@ -41,3 +41,21 @@ export type Sheet = {
   ft_per_px: number | null;
   created_at: string;
 };
+
+export type DeviceType = "panel" | "fixture" | "receptacle" | "switch";
+
+export type DeviceAttrs = {
+  label?: string;
+  watts?: number;
+};
+
+export type Device = {
+  id: string;
+  sheet_id: string;
+  type: DeviceType;
+  x: number;
+  y: number;
+  attrs: DeviceAttrs;
+  circuit_id: string | null;
+  created_at: string;
+};

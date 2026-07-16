@@ -65,7 +65,8 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
       setProgress(45);
 
       const sheetId = crypto.randomUUID();
-      const base = `${projectId}/${sheetId}`;
+      // First folder = auth user id so storage RLS from migration 001/003 matches.
+      const base = `${user.id}/${projectId}/${sheetId}`;
       const pdfPath = `${base}/source.pdf`;
       const imagePath = `${base}/raster.png`;
 
@@ -77,7 +78,11 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
           contentType: "application/pdf",
           upsert: false,
         });
-      if (pdfErr) throw pdfErr;
+      if (pdfErr) {
+        throw new Error(
+          `Storage (PDF): ${pdfErr.message}. If this is an RLS error, run supabase/migrations/003_storage_plans_fix_rls.sql in the Supabase SQL editor.`
+        );
+      }
       setProgress(70);
 
       setPhase("uploading-png");
@@ -88,7 +93,9 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
           contentType: "image/png",
           upsert: false,
         });
-      if (imgErr) throw imgErr;
+      if (imgErr) {
+        throw new Error(`Storage (PNG): ${imgErr.message}`);
+      }
       setProgress(90);
 
       setPhase("saving");
@@ -110,7 +117,9 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
         })
         .select("id")
         .single();
-      if (rowErr) throw rowErr;
+      if (rowErr) {
+        throw new Error(`Database (sheets): ${rowErr.message}`);
+      }
 
       setProgress(100);
       setMsg("Done");

@@ -1,6 +1,7 @@
 -- Run in the Supabase SQL editor (in order):
 --   migrations/001_initial_schema.sql
---   migrations/002_storage_plans_by_project.sql
+--   migrations/003_storage_plans_fix_rls.sql
 --
 -- 001: tables, RLS, private `plans` bucket
--- 002: storage paths {projectId}/{sheetId}/... owned via projects.user_id
+-- 003: storage RLS for {userId}/{projectId}/{sheetId}/... (and projectId-first paths)
+-- (002 is superseded by 003 — safe to skip if you never ran it)
