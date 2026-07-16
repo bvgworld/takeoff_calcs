@@ -61,9 +61,11 @@ export default async function SheetPage({
 
   return (
     <SheetViewer
+      sheetId={s.id}
       imageUrl={signed.signedUrl}
       imageW={s.image_w}
       imageH={s.image_h}
+      initialFtPerPx={s.ft_per_px}
       title={`${p.name} · ${s.name}`}
       backHref={`/projects/${p.id}`}
     />
