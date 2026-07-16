@@ -14,7 +14,8 @@ import type Konva from "konva";
 import useImage from "./use-image";
 import { CalibrateDialog } from "./CalibrateDialog";
 import { DeviceShape } from "./DeviceShape";
-import { DeviceSidePanel } from "./DeviceSidePanel";
+import { SheetSidePanel } from "./SheetSidePanel";
+import { RouteLayer } from "./RouteLayer";
 import { createClient } from "@/lib/supabase/client";
 import {
   formatFtIn,
@@ -23,7 +24,18 @@ import {
   pxToFt,
 } from "@/lib/scale";
 import { countByType, defaultAttrs } from "@/lib/devices";
-import type { Device, DeviceType } from "@/lib/types";
+import { routeCircuit } from "@/lib/routing";
+import { autoGroupDevices } from "@/lib/auto-group";
+import type {
+  Circuit,
+  CodeCheck,
+  Device,
+  DeviceType,
+  Point as GeoPoint,
+  ProjectSettings,
+  Route,
+} from "@/lib/types";
+import { DEFAULT_SETTINGS } from "@/lib/types";
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 8;
@@ -47,6 +59,7 @@ type Props = {
   imageW: number;
   imageH: number;
   initialFtPerPx: number | null;
+  settings?: ProjectSettings;
   title?: string;
   backHref?: string;
 };
@@ -57,9 +70,11 @@ export function SheetViewer({
   imageW,
   imageH,
   initialFtPerPx,
+  settings: settingsProp,
   title,
   backHref,
 }: Props) {
+  const settings = settingsProp || DEFAULT_SETTINGS;
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
@@ -93,12 +108,18 @@ export function SheetViewer({
   const [saving, setSaving] = useState(false);
 
   const [devices, setDevices] = useState<Device[]>([]);
+  const [circuits, setCircuits] = useState<Circuit[]>([]);
+  const [routes, setRoutes] = useState<Route[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
+  const [editRoutes, setEditRoutes] = useState(false);
+  const [checkDetail, setCheckDetail] = useState<CodeCheck | null>(null);
   const [lasso, setLasso] = useState<{
     start: Point;
     current: Point;
   } | null>(null);
   const lassoRef = useRef<{ start: Point; active: boolean } | null>(null);
+  const routePersistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const calibrated = isCalibrated(ftPerPx);
   const pointing = tool === "calibrate" || tool === "measure";
@@ -115,20 +136,28 @@ export function SheetViewer({
     [devices, selectedIds]
   );
 
-  // Load devices
+  // Load devices, circuits, routes
   useEffect(() => {
     const supabase = createClient();
-    void supabase
-      .from("devices")
-      .select("*")
-      .eq("sheet_id", sheetId)
-      .then(({ data, error }) => {
-        if (error) {
-          console.error(error);
-          return;
-        }
-        setDevices((data as Device[]) || []);
-      });
+    void (async () => {
+      const [{ data: devs }, { data: ckts }] = await Promise.all([
+        supabase.from("devices").select("*").eq("sheet_id", sheetId),
+        supabase.from("circuits").select("*").eq("sheet_id", sheetId),
+      ]);
+      setDevices((devs as Device[]) || []);
+      const circuitRows = (ckts as Circuit[]) || [];
+      setCircuits(circuitRows);
+      const ids = circuitRows.map((c) => c.id);
+      if (ids.length) {
+        const { data: rts } = await supabase
+          .from("routes")
+          .select("*")
+          .in("circuit_id", ids);
+        setRoutes((rts as Route[]) || []);
+      } else {
+        setRoutes([]);
+      }
+    })();
   }, [sheetId]);
 
   useEffect(() => {
@@ -659,7 +688,7 @@ export function SheetViewer({
 
       <div
         ref={containerRef}
-        className="absolute inset-0 right-64"
+        className="absolute inset-0 right-72"
         style={{ cursor: cursorFor(tool) }}
       >
         <Stage
@@ -704,7 +733,7 @@ export function SheetViewer({
                 device={d}
                 selected={selectedIds.includes(d.id)}
                 ftPerPx={ftPerPx}
-                listening={tool === "select"}
+                listening={tool === "select" && !editRoutes}
                 onSelect={(shift) => {
                   if (tool !== "select") return;
                   setSelectedIds((prev) => {
@@ -746,6 +775,48 @@ export function SheetViewer({
                 }}
               />
             ))}
+          </Layer>
+
+          {/* Layer 3 — routes */}
+          <Layer perfectDrawEnabled={false}>
+            {ftPerPx && (
+              <RouteLayer
+                circuits={circuits}
+                routes={routes}
+                ftPerPx={ftPerPx}
+                selectedRouteId={selectedRouteId}
+                editMode={editRoutes}
+                onSelectRoute={setSelectedRouteId}
+                onPathChange={(routeId, path, planFt, userEdited) => {
+                  setRoutes((prev) =>
+                    prev.map((r) =>
+                      r.id === routeId
+                        ? {
+                            ...r,
+                            path: path as GeoPoint[],
+                            plan_length_ft: planFt,
+                            user_edited: userEdited,
+                          }
+                        : r
+                    )
+                  );
+                  if (routePersistTimer.current) {
+                    clearTimeout(routePersistTimer.current);
+                  }
+                  routePersistTimer.current = setTimeout(() => {
+                    const supabase = createClient();
+                    void supabase
+                      .from("routes")
+                      .update({
+                        path,
+                        plan_length_ft: planFt,
+                        user_edited: userEdited,
+                      })
+                      .eq("id", routeId);
+                  }, 150);
+                }}
+              />
+            )}
           </Layer>
 
           {/* Overlay — measure / calibrate / lasso */}
@@ -821,7 +892,7 @@ export function SheetViewer({
         </Stage>
       </div>
 
-      <DeviceSidePanel
+      <SheetSidePanel
         selected={selected}
         onChangeLabel={(label) => {
           void persistAttrs(
@@ -834,6 +905,243 @@ export function SheetViewer({
             .filter((d) => d.type === "fixture")
             .map((d) => d.id);
           void persistAttrs(ids, { watts });
+        }}
+        devices={devices}
+        circuits={circuits}
+        routes={routes}
+        settings={settings}
+        ftPerPx={ftPerPx}
+        editRoutes={editRoutes}
+        onToggleEditRoutes={() => setEditRoutes((v) => !v)}
+        checkDetail={checkDetail}
+        onCheckClick={setCheckDetail}
+        onNewCircuit={async ({ panelId, ctype, voltage }) => {
+          const supabase = createClient();
+          const nextNum =
+            circuits.reduce((m, c) => Math.max(m, c.number), 0) + 1;
+          const { data, error } = await supabase
+            .from("circuits")
+            .insert({
+              sheet_id: sheetId,
+              panel_device_id: panelId,
+              number: nextNum,
+              ctype,
+              voltage,
+              breaker_amps: 20,
+            })
+            .select("*")
+            .single();
+          if (error) {
+            alert(error.message);
+            return;
+          }
+          setCircuits((prev) => [...prev, data as Circuit]);
+        }}
+        onAssignSelected={async (circuitId) => {
+          const ids = selectedIds.filter((id) => {
+            const d = devices.find((x) => x.id === id);
+            return d && d.type !== "panel";
+          });
+          if (!ids.length) return;
+          setDevices((prev) =>
+            prev.map((d) =>
+              ids.includes(d.id) ? { ...d, circuit_id: circuitId } : d
+            )
+          );
+          const supabase = createClient();
+          const { error } = await supabase
+            .from("devices")
+            .update({ circuit_id: circuitId })
+            .in("id", ids);
+          if (error) alert(error.message);
+        }}
+        onAutoGroup={async (ctype, panelId) => {
+          const clusters = autoGroupDevices({
+            devices,
+            ctype,
+            settings,
+          });
+          if (!clusters.length) {
+            alert("No unassigned devices to group.");
+            return;
+          }
+          const supabase = createClient();
+          let nextNum =
+            circuits.reduce((m, c) => Math.max(m, c.number), 0) + 1;
+          const created: Circuit[] = [];
+          for (const cluster of clusters) {
+            const voltage =
+              ctype === "lighting"
+                ? settings.lighting_voltage
+                : settings.receptacle_voltage;
+            const { data, error } = await supabase
+              .from("circuits")
+              .insert({
+                sheet_id: sheetId,
+                panel_device_id: panelId,
+                number: nextNum++,
+                ctype,
+                voltage,
+                breaker_amps: 20,
+              })
+              .select("*")
+              .single();
+            if (error) {
+              alert(error.message);
+              break;
+            }
+            const ckt = data as Circuit;
+            created.push(ckt);
+            await supabase
+              .from("devices")
+              .update({ circuit_id: ckt.id })
+              .in("id", cluster.deviceIds);
+            setDevices((prev) =>
+              prev.map((d) =>
+                cluster.deviceIds.includes(d.id)
+                  ? { ...d, circuit_id: ckt.id }
+                  : d
+              )
+            );
+          }
+          setCircuits((prev) => [...prev, ...created]);
+        }}
+        onRoute={async (circuitId) => {
+          if (!ftPerPx) {
+            alert("Calibrate first.");
+            return;
+          }
+          const circuit = circuits.find((c) => c.id === circuitId);
+          if (!circuit) return;
+          const panel = devices.find((d) => d.id === circuit.panel_device_id);
+          if (!panel) {
+            alert("Panel missing.");
+            return;
+          }
+          const onCkt = devices.filter((d) => d.circuit_id === circuitId);
+          const proposed = routeCircuit({
+            panel,
+            devicesOnCircuit: onCkt,
+            ctype: circuit.ctype,
+            ftPerPx,
+          });
+          const supabase = createClient();
+          // Keep user_edited routes
+          await supabase
+            .from("routes")
+            .delete()
+            .eq("circuit_id", circuitId)
+            .eq("user_edited", false);
+          const kept = routes.filter(
+            (r) => r.circuit_id === circuitId && r.user_edited
+          );
+          const others = routes.filter((r) => r.circuit_id !== circuitId);
+          if (proposed.length) {
+            const { data, error } = await supabase
+              .from("routes")
+              .insert(
+                proposed.map((p) => ({
+                  circuit_id: circuitId,
+                  kind: p.kind,
+                  path: p.path,
+                  plan_length_ft: p.plan_length_ft,
+                  user_edited: false,
+                }))
+              )
+              .select("*");
+            if (error) {
+              alert(error.message);
+              return;
+            }
+            setRoutes([...others, ...kept, ...((data as Route[]) || [])]);
+          } else {
+            setRoutes([...others, ...kept]);
+          }
+        }}
+        onRouteAll={async () => {
+          if (!ftPerPx) {
+            alert("Calibrate first.");
+            return;
+          }
+          const supabase = createClient();
+          const kept = routes.filter((r) => r.user_edited);
+          const cktIds = circuits.map((c) => c.id);
+          if (cktIds.length) {
+            await supabase
+              .from("routes")
+              .delete()
+              .in("circuit_id", cktIds)
+              .eq("user_edited", false);
+          }
+          const inserted: Route[] = [];
+          for (const c of circuits) {
+            const panel = devices.find((d) => d.id === c.panel_device_id);
+            if (!panel) continue;
+            const onCkt = devices.filter((d) => d.circuit_id === c.id);
+            const proposed = routeCircuit({
+              panel,
+              devicesOnCircuit: onCkt,
+              ctype: c.ctype,
+              ftPerPx,
+            });
+            if (!proposed.length) continue;
+            const { data, error } = await supabase
+              .from("routes")
+              .insert(
+                proposed.map((p) => ({
+                  circuit_id: c.id,
+                  kind: p.kind,
+                  path: p.path,
+                  plan_length_ft: p.plan_length_ft,
+                  user_edited: false,
+                }))
+              )
+              .select("*");
+            if (error) {
+              alert(error.message);
+              break;
+            }
+            inserted.push(...((data as Route[]) || []));
+          }
+          setRoutes([...kept, ...inserted]);
+        }}
+        onResetRoutes={async (circuitId) => {
+          const supabase = createClient();
+          await supabase.from("routes").delete().eq("circuit_id", circuitId);
+          setRoutes((prev) => prev.filter((r) => r.circuit_id !== circuitId));
+          // re-route fresh
+          if (!ftPerPx) return;
+          const circuit = circuits.find((c) => c.id === circuitId);
+          const panel = devices.find((d) => d.id === circuit?.panel_device_id);
+          if (!circuit || !panel) return;
+          const onCkt = devices.filter((d) => d.circuit_id === circuitId);
+          const proposed = routeCircuit({
+            panel,
+            devicesOnCircuit: onCkt,
+            ctype: circuit.ctype,
+            ftPerPx,
+          });
+          if (!proposed.length) return;
+          const { data, error } = await supabase
+            .from("routes")
+            .insert(
+              proposed.map((p) => ({
+                circuit_id: circuitId,
+                kind: p.kind,
+                path: p.path,
+                plan_length_ft: p.plan_length_ft,
+                user_edited: false,
+              }))
+            )
+            .select("*");
+          if (error) {
+            alert(error.message);
+            return;
+          }
+          setRoutes((prev) => [
+            ...prev.filter((r) => r.circuit_id !== circuitId),
+            ...((data as Route[]) || []),
+          ]);
         }}
       />
 

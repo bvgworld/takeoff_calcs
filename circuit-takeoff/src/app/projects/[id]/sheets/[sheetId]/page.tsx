@@ -2,7 +2,8 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { SheetViewer } from "@/components/canvas/SheetViewer";
-import type { Project, Sheet } from "@/lib/types";
+import type { Project, ProjectSettings, Sheet } from "@/lib/types";
+import { DEFAULT_SETTINGS } from "@/lib/types";
 
 export default async function SheetPage({
   params,
@@ -17,7 +18,7 @@ export default async function SheetPage({
 
   const { data: project } = await supabase
     .from("projects")
-    .select("id, name")
+    .select("*")
     .eq("id", params.id)
     .single();
   if (!project) notFound();
@@ -31,7 +32,7 @@ export default async function SheetPage({
   if (!sheet) notFound();
 
   const s = sheet as Sheet;
-  const p = project as Pick<Project, "id" | "name">;
+  const p = project as Project;
 
   const { data: signed } = await supabase.storage
     .from("plans")
@@ -44,7 +45,7 @@ export default async function SheetPage({
           <p className="text-sm text-perry-signal">
             Could not load sheet image URL. If uploads fail, run{" "}
             <code className="text-xs">
-              supabase/migrations/002_storage_plans_by_project.sql
+              supabase/migrations/003_storage_plans_fix_rls.sql
             </code>
             .
           </p>
@@ -66,6 +67,7 @@ export default async function SheetPage({
       imageW={s.image_w}
       imageH={s.image_h}
       initialFtPerPx={s.ft_per_px}
+      settings={(p.settings as ProjectSettings) || DEFAULT_SETTINGS}
       title={`${p.name} · ${s.name}`}
       backHref={`/projects/${p.id}`}
     />

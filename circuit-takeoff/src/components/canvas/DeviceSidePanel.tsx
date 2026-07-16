@@ -15,13 +15,13 @@ export function DeviceSidePanel({
 }: Props) {
   if (selected.length === 0) {
     return (
-      <aside className="absolute bottom-0 right-0 top-0 z-20 w-64 border-l border-perry-silver bg-white p-4 shadow-sm">
+      <div>
         <h2 className="font-display text-sm text-perry-industrial">Selection</h2>
         <p className="mt-3 text-xs text-gray-500">
           Click a device to select. Shift-click to multi-select. Drag to move.
-          Delete key removes.
+          Delete key removes. Lasso-select then assign on the Circuits tab.
         </p>
-      </aside>
+      </div>
     );
   }
 
@@ -37,12 +37,10 @@ export function DeviceSidePanel({
   const wattsValue = sameWatts ? String(selected[0].attrs.watts ?? 36) : "";
 
   return (
-    <aside className="absolute bottom-0 right-0 top-0 z-20 w-64 overflow-auto border-l border-perry-silver bg-white p-4 shadow-sm">
+    <div>
       <h2 className="font-display text-sm text-perry-industrial">Selection</h2>
       <p className="mt-1 text-xs text-gray-500">
-        {selected.length > 1
-          ? `${selected.length} devices`
-          : types[0]}
+        {selected.length > 1 ? `${selected.length} devices` : types[0]}
       </p>
 
       <label className="mt-4 block text-xs font-semibold uppercase tracking-wide text-gray-500">
@@ -80,6 +78,6 @@ export function DeviceSidePanel({
           />
         </label>
       )}
-    </aside>
+    </div>
   );
 }

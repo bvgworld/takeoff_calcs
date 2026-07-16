@@ -59,3 +59,39 @@ export type Device = {
   circuit_id: string | null;
   created_at: string;
 };
+
+export type CircuitType = "lighting" | "receptacle";
+
+export type Circuit = {
+  id: string;
+  sheet_id: string;
+  panel_device_id: string;
+  number: number;
+  ctype: CircuitType;
+  voltage: number;
+  breaker_amps: number;
+  created_at: string;
+};
+
+export type RouteKind = "homerun" | "branch" | "switchleg";
+
+export type Point = { x: number; y: number };
+
+export type Route = {
+  id: string;
+  circuit_id: string;
+  kind: RouteKind;
+  path: Point[];
+  plan_length_ft: number;
+  user_edited: boolean;
+  created_at: string;
+};
+
+export type CheckStatus = "pass" | "warn" | "fail";
+
+export type CodeCheck = {
+  status: CheckStatus;
+  name: string;
+  detail: string;
+  why: string;
+};
