@@ -1,0 +1,4 @@
+-- Run this in the Supabase SQL editor:
+--   migrations/001_initial_schema.sql
+--
+-- That file creates tables, RLS policies, and the private `plans` storage bucket.

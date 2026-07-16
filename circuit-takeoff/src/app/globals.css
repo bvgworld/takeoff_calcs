@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --perry-blue: #2c64f2;
+  --industrial: #141e2c;
+  --electric-white: #f6f7fc;
+  --silver: #c5cbd8;
+  --signal: #a01825;
+}
+
+body {
+  color: var(--industrial);
+  background: var(--electric-white);
+  font-family: var(--font-poppins), system-ui, sans-serif;
+}
+
+h1,
+h2,
+h3,
+.font-display {
+  font-family: var(--font-anton), sans-serif;
+  font-weight: 400;
+  letter-spacing: 0.5px;
+}
