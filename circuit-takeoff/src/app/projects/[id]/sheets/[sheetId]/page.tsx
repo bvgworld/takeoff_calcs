@@ -1,7 +1,8 @@
+import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { SheetWorkspace } from "@/components/sheet/SheetWorkspace";
-import type { Circuit, Device, Project, Route, Sheet } from "@/lib/types";
+import { SheetViewer } from "@/components/canvas/SheetViewer";
+import type { Project, Sheet } from "@/lib/types";
 
 export default async function SheetPage({
   params,
@@ -16,7 +17,7 @@ export default async function SheetPage({
 
   const { data: project } = await supabase
     .from("projects")
-    .select("*")
+    .select("id, name")
     .eq("id", params.id)
     .single();
   if (!project) notFound();
@@ -29,38 +30,42 @@ export default async function SheetPage({
     .single();
   if (!sheet) notFound();
 
-  const { data: devices } = await supabase
-    .from("devices")
-    .select("*")
-    .eq("sheet_id", params.sheetId);
-
-  const { data: circuits } = await supabase
-    .from("circuits")
-    .select("*")
-    .eq("sheet_id", params.sheetId);
-
-  const cktIds = ((circuits as Circuit[]) || []).map((c) => c.id);
-  let routeRows: Route[] = [];
-  if (cktIds.length) {
-    const { data } = await supabase
-      .from("routes")
-      .select("*")
-      .in("circuit_id", cktIds);
-    routeRows = (data as Route[]) || [];
-  }
+  const s = sheet as Sheet;
+  const p = project as Pick<Project, "id" | "name">;
 
   const { data: signed } = await supabase.storage
     .from("plans")
-    .createSignedUrl((sheet as Sheet).image_path, 60 * 60 * 4);
+    .createSignedUrl(s.image_path, 60 * 60 * 4);
+
+  if (!signed?.signedUrl) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-perry-white p-6">
+        <div className="text-center">
+          <p className="text-sm text-perry-signal">
+            Could not load sheet image URL. If uploads fail, run{" "}
+            <code className="text-xs">
+              supabase/migrations/002_storage_plans_by_project.sql
+            </code>
+            .
+          </p>
+          <Link
+            href={`/projects/${p.id}`}
+            className="mt-3 inline-block text-sm text-perry-blue"
+          >
+            ← Back to project
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <SheetWorkspace
-      project={project as Project}
-      sheet={sheet as Sheet}
-      initialDevices={(devices as Device[]) || []}
-      initialCircuits={(circuits as Circuit[]) || []}
-      initialRoutes={routeRows}
-      imageUrl={signed?.signedUrl || ""}
+    <SheetViewer
+      imageUrl={signed.signedUrl}
+      imageW={s.image_w}
+      imageH={s.image_h}
+      title={`${p.name} · ${s.name}`}
+      backHref={`/projects/${p.id}`}
     />
   );
 }

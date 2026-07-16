@@ -1,4 +1,6 @@
--- Run this in the Supabase SQL editor:
+-- Run in the Supabase SQL editor (in order):
 --   migrations/001_initial_schema.sql
+--   migrations/002_storage_plans_by_project.sql
 --
--- That file creates tables, RLS policies, and the private `plans` storage bucket.
+-- 001: tables, RLS, private `plans` bucket
+-- 002: storage paths {projectId}/{sheetId}/... owned via projects.user_id
