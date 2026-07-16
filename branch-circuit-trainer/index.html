@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Branch Circuit Trainer — Perry Electrical</title>
+<link href="https://fonts.googleapis.com/css2?family=Anton&family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --perry-blue:#2C64F2; --industrial:#141E2C; --white:#F6F7FC;
+    --silver:#C5CBD8; --signal:#A01825;
+    --pass:#1D7A46; --pass-bg:#E7F4EC; --warn:#9A6A00; --warn-bg:#FBF3DC;
+    --fail:#A01825; --fail-bg:#F9E9EB;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:'Poppins',sans-serif;background:var(--white);color:var(--industrial);font-size:15px;line-height:1.55}
+  header{background:var(--industrial);color:var(--white);padding:22px 28px;display:flex;align-items:baseline;gap:16px;flex-wrap:wrap}
+  header h1{font-family:'Anton',sans-serif;font-size:26px;letter-spacing:1px;font-weight:400}
+  header h1 span{color:var(--perry-blue)}
+  header p{color:var(--silver);font-size:13px}
+  .wrap{max-width:1180px;margin:0 auto;padding:24px 20px;display:grid;grid-template-columns:320px 1fr;gap:24px}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  .card{background:#fff;border:1px solid var(--silver);border-radius:10px;padding:18px 20px}
+  .card h2{font-family:'Anton',sans-serif;font-weight:400;font-size:17px;letter-spacing:.5px;margin-bottom:12px;color:var(--industrial)}
+  label{display:block;font-size:12px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;color:#5A6472;margin:12px 0 4px}
+  select,input[type=number]{width:100%;padding:8px 10px;border:1px solid var(--silver);border-radius:6px;font-family:'Poppins';font-size:14px;background:#fff;color:var(--industrial)}
+  select:focus,input:focus{outline:2px solid var(--perry-blue);outline-offset:1px}
+  .seg{display:flex;border:1px solid var(--silver);border-radius:6px;overflow:hidden;margin-top:2px}
+  .seg button{flex:1;padding:8px 6px;border:none;background:#fff;font-family:'Poppins';font-size:13px;cursor:pointer;color:var(--industrial)}
+  .seg button.on{background:var(--perry-blue);color:#fff;font-weight:600}
+  .hint{font-size:12px;color:#5A6472;margin-top:4px}
+  .diagram-card{margin-bottom:24px}
+  svg text{font-family:'Poppins',sans-serif}
+  .checks{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;margin-bottom:24px}
+  .check{border-radius:8px;padding:12px 14px;border-left:5px solid}
+  .check.pass{background:var(--pass-bg);border-color:var(--pass)}
+  .check.warn{background:var(--warn-bg);border-color:var(--warn)}
+  .check.fail{background:var(--fail-bg);border-color:var(--fail)}
+  .check .status{font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase}
+  .check.pass .status{color:var(--pass)} .check.warn .status{color:var(--warn)} .check.fail .status{color:var(--fail)}
+  .check .name{font-weight:600;font-size:14px;margin:2px 0}
+  .check .detail{font-size:13px}
+  .check details{margin-top:8px;font-size:12.5px}
+  .check summary{cursor:pointer;color:var(--perry-blue);font-weight:500}
+  .check details p{margin-top:6px;color:#3A4250}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#5A6472;border-bottom:2px solid var(--industrial);padding:6px 8px}
+  td{padding:7px 8px;border-bottom:1px solid #E4E7EE;vertical-align:top}
+  td.qty{text-align:right;font-weight:600;white-space:nowrap}
+  tr.section td{background:var(--industrial);color:var(--white);font-family:'Anton';letter-spacing:.5px;font-size:13px;padding:5px 8px}
+  .foot{font-size:12px;color:#5A6472;margin-top:10px}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;margin-top:10px;color:#3A4250}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .lk{width:26px;height:0;border-top:3px solid var(--industrial);display:inline-block}
+  .lk.mc{border-top:3px dashed var(--perry-blue)}
+  .pill{display:inline-block;background:var(--perry-blue);color:#fff;font-size:11px;font-weight:600;border-radius:20px;padding:2px 10px;margin-left:6px}
+</style>
+</head>
+<body>
+<header>
+  <h1>PERRY <span>ELECTRICAL</span> · BRANCH CIRCUIT TRAINER</h1>
+  <p>Design a circuit → check it against code → see the takeoff</p>
+</header>
+
+<div class="wrap">
+  <!-- CONTROLS -->
+  <aside class="card">
+    <h2>SCENARIO</h2>
+    <label for="preset">Load a preset</label>
+    <select id="preset" onchange="applyPreset()">
+      <option value="">— Build your own —</option>
+      <option value="office277">Office lighting · 277V</option>
+      <option value="office120">Small bldg lighting · 120V</option>
+      <option value="recept">Open office receptacles</option>
+      <option value="dedicated">Break room fridge (dedicated)</option>
+      <option value="warehouse">Warehouse lighting · long run</option>
+      <option value="overload">Overloaded circuit (find the fails)</option>
+    </select>
+
+    <label>Circuit type</label>
+    <div class="seg" id="typeSeg">
+      <button data-v="lighting" class="on" onclick="setType('lighting')">Lighting</button>
+      <button data-v="recept" onclick="setType('recept')">Receptacles</button>
+    </div>
+
+    <label for="voltage">System voltage</label>
+    <select id="voltage" onchange="recalc()">
+      <option value="277">277V (480Y/277 lighting)</option>
+      <option value="120">120V (208Y/120)</option>
+    </select>
+
+    <label for="count" id="countLabel">Fixtures on circuit</label>
+    <input type="number" id="count" value="24" min="1" max="200" onchange="recalc()" oninput="recalc()">
+
+    <div id="wattRow">
+      <label for="watts">Watts per fixture</label>
+      <input type="number" id="watts" value="36" min="5" max="1000" onchange="recalc()" oninput="recalc()">
+      <p class="hint">Typical LED 2×4 troffer: 30–40W. Highbay: 100–240W.</p>
+    </div>
+
+    <label for="hrLen">Home run length (ft, panel to first box)</label>
+    <input type="number" id="hrLen" value="60" min="5" max="600" onchange="recalc()" oninput="recalc()">
+
+    <label for="spacing">Avg spacing between devices (ft)</label>
+    <input type="number" id="spacing" value="12" min="2" max="100" onchange="recalc()" oninput="recalc()">
+
+    <label for="ckts">Circuits sharing the home run conduit</label>
+    <select id="ckts" onchange="recalc()">
+      <option value="1">1 circuit (3 wires)</option>
+      <option value="2">2 circuits (5 wires)</option>
+      <option value="3" selected>3 circuits (7 wires)</option>
+      <option value="4">4 circuits (9 wires)</option>
+      <option value="6">6 circuits (13 wires)</option>
+    </select>
+    <p class="hint">Hots + neutrals per circuit, one shared ground.</p>
+
+    <label>Branch wiring method (per spec)</label>
+    <div class="seg" id="methodSeg">
+      <button data-v="mc" class="on" onclick="setMethod('mc')">MC allowed</button>
+      <button data-v="emt" onclick="setMethod('emt')">Full EMT</button>
+    </div>
+    <p class="hint">Always a spec-review item. Full-pipe jobs run roughly 1.5–2× the branch labor.</p>
+  </aside>
+
+  <!-- RESULTS -->
+  <main>
+    <div class="card diagram-card">
+      <h2>CIRCUIT ONE-LINE <span class="pill" id="cktTag">LP-1 · 20A/1P</span></h2>
+      <div id="svgHolder"></div>
+      <div class="legend">
+        <span><span class="lk"></span> EMT home run</span>
+        <span><span class="lk mc" id="branchKey"></span> <span id="branchKeyLabel">12/2 MC branch</span></span>
+        <span>Hash marks = conductors in the pipe</span>
+      </div>
+    </div>
+
+    <div class="checks" id="checks"></div>
+
+    <div class="card">
+      <h2>ESTIMATING TAKEOFF <span class="pill">translate to McCormick</span></h2>
+      <table id="takeoff"></table>
+      <p class="foot" id="tkFoot"></p>
+    </div>
+  </main>
+</div>
+
+<script>
+let state = { type:'lighting', method:'mc' };
+
+const K = 12.9;                      // copper, VD constant
+const CM = { '12':6530, '10':10380, '8':16510 };
+const FILL = [ ['1/2"',9], ['3/4"',16], ['1"',26], ['1-1/4"',45] ];  // #12 THHN per EMT size
+
+function $(id){ return document.getElementById(id); }
+function setType(t){
+  state.type = t;
+  document.querySelectorAll('#typeSeg button').forEach(b=>b.classList.toggle('on', b.dataset.v===t));
+  $('wattRow').style.display = t==='lighting' ? 'block':'none';
+  $('countLabel').textContent = t==='lighting' ? 'Fixtures on circuit' : 'Receptacles on circuit';
+  if(t==='recept'){ $('voltage').value='120'; }
+  recalc();
+}
+function setMethod(m){
+  state.method = m;
+  document.querySelectorAll('#methodSeg button').forEach(b=>b.classList.toggle('on', b.dataset.v===m));
+  recalc();
+}
+function applyPreset(){
+  const p = $('preset').value; if(!p) return;
+  const set = (type,volt,count,watts,hr,sp,ck,me)=>{
+    setTypeSilent(type); $('voltage').value=volt; $('count').value=count;
+    $('watts').value=watts; $('hrLen').value=hr; $('spacing').value=sp;
+    $('ckts').value=ck; setMethodSilent(me); recalc();
+  };
+  if(p==='office277')  set('lighting',277,24,36,60,12,3,'mc');
+  if(p==='office120')  set('lighting',120,12,36,45,12,2,'mc');
+  if(p==='recept')     set('recept',120,8,0,55,15,3,'mc');
+  if(p==='dedicated')  set('recept',120,1,0,70,10,1,'mc');
+  if(p==='warehouse')  set('lighting',277,20,150,220,25,2,'emt');
+  if(p==='overload')   set('lighting',120,28,60,180,12,6,'mc');
+}
+function setTypeSilent(t){ state.type=t;
+  document.querySelectorAll('#typeSeg button').forEach(b=>b.classList.toggle('on', b.dataset.v===t));
+  $('wattRow').style.display = t==='lighting' ? 'block':'none';
+  $('countLabel').textContent = t==='lighting' ? 'Fixtures on circuit' : 'Receptacles on circuit';
+}
+function setMethodSilent(m){ state.method=m;
+  document.querySelectorAll('#methodSeg button').forEach(b=>b.classList.toggle('on', b.dataset.v===m));
+}
+
+function recalc(){
+  const t = state.type;
+  const V = +$('voltage').value;
+  const n = Math.max(1, +$('count').value||1);
+  const w = +$('watts').value||36;
+  const hr = Math.max(5, +$('hrLen').value||60);
+  const sp = Math.max(2, +$('spacing').value||12);
+  const ckts = +$('ckts').value;
+
+  // ---- LOAD ----
+  const va = t==='lighting' ? n*w : n*180;
+  const amps = va / V;
+  const continuous = (t==='lighting');           // lighting = continuous load
+  const limit = continuous ? 16 : 20;            // 20A breaker, 80% if continuous
+  const pct = amps/limit*100;
+
+  // ---- BRANCH LENGTH / FARTHEST POINT ----
+  const branchLen = t==='lighting' ? (n-1)*sp + 20 : (n>1 ? (n-1)*sp : 0);  // +20ft switch leg
+  const farthest = hr + branchLen;
+
+  // ---- VOLTAGE DROP ----
+  const vd12 = 2*K*amps*farthest/CM['12'];
+  const vd10 = 2*K*amps*farthest/CM['10'];
+  const vd12p = vd12/V*100, vd10p = vd10/V*100;
+  let wireSize = '#12', vdp = vd12p;
+  if(vd12p > 3 && vd10p <= 3){ wireSize='#10'; vdp = vd10p; }
+  else if(vd12p > 3){ wireSize='#8'; vdp = 2*K*amps*farthest/CM['8']/V*100; }
+
+  // ---- HOME RUN CONDUIT: FILL + DERATING ----
+  const ccc = ckts*2;                            // current-carrying conductors
+  const totalWires = ckts*2 + 1;                 // + shared ground
+  let emtSize='—', emtOk=false;
+  for(const [sz,cap] of FILL){ if(totalWires<=cap){ emtSize=sz; emtOk=true; break; } }
+  // derating on #12 THHN (30A @90°C column)
+  let derFactor=1, derAmp=30;
+  if(ccc>=4&&ccc<=6){derFactor=.8} else if(ccc>=7&&ccc<=9){derFactor=.7}
+  else if(ccc>=10&&ccc<=20){derFactor=.5}
+  derAmp = 30*derFactor;
+  const derOk = derAmp >= 20;
+  if(!derOk && emtSize==='3/4"') emtSize='3/4"';  // size is fine; conductor count isn't
+
+  // ---- MAX DEVICES helper ----
+  const maxDev = t==='lighting' ? Math.floor(V*16/w) : 13;
+  const devOk = n <= maxDev;
+
+  // ---- RENDER ----
+  $('cktTag').textContent = `LP-1 · 20A/1P · ${V}V`;
+  drawDiagram(t,n,ckts,totalWires);
+  renderChecks({t,V,n,w,va,amps,pct,limit,continuous,maxDev,devOk,ccc,totalWires,emtSize,emtOk,derFactor,derAmp,derOk,vd12p,vdp,wireSize,farthest});
+  renderTakeoff({t,n,hr,sp,branchLen,ckts,totalWires,wireSize,emtSize});
+  $('branchKeyLabel').textContent = state.method==='mc'
+    ? `12/2 MC branch` : `Branch in EMT (3 × ${wireSize})`;
+}
+
+// ================= DIAGRAM =================
+function drawDiagram(t,n,ckts,totalWires){
+  const shown = Math.min(n, 8);
+  const more = n - shown;
+  const W = 900, H = 260;
+  const devW = t==='lighting'?64:40, devGap = 18;
+  let x0 = 300;                                  // first device x
+  let s = `<svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="Circuit one-line diagram">`;
+
+  // panel
+  s += `<rect x="20" y="80" width="90" height="110" rx="8" fill="#141E2C"/>
+        <text x="65" y="120" text-anchor="middle" fill="#F6F7FC" font-size="13" font-weight="600">LP-1</text>
+        <text x="65" y="140" text-anchor="middle" fill="#C5CBD8" font-size="11">20A/1P</text>
+        <text x="65" y="156" text-anchor="middle" fill="#C5CBD8" font-size="11">bkr</text>`;
+
+  // home run (EMT) with conductor hash marks
+  const hy = 135;
+  const hx2 = t==='lighting' ? 200 : x0 - 10;
+  s += `<line x1="110" y1="${hy}" x2="${hx2}" y2="${hy}" stroke="#141E2C" stroke-width="3"/>`;
+  const marks = Math.min(totalWires, 9);
+  const mx0 = 122, mstep = Math.min(9,(hx2-134)/marks);
+  for(let i=0;i<marks;i++){
+    const mx = mx0 + i*mstep;
+    s += `<line x1="${mx}" y1="${hy-9}" x2="${mx+7}" y2="${hy+9}" stroke="#141E2C" stroke-width="1.6"/>`;
+  }
+  s += `<text x="${(110+hx2)/2}" y="${hy+28}" text-anchor="middle" fill="#3A4250" font-size="11.5">EMT home run · ${totalWires} wires (${ckts} ckt${ckts>1?'s':''} + gnd)</text>`;
+
+  const branchColor = '#2C64F2';
+  const dash = state.method==='mc' ? 'stroke-dasharray="7 5"' : '';
+
+  if(t==='lighting'){
+    // switch box
+    s += `<rect x="200" y="115" width="52" height="40" rx="6" fill="#fff" stroke="#141E2C" stroke-width="1.5"/>
+          <text x="226" y="133" text-anchor="middle" fill="#141E2C" font-size="11" font-weight="600">S</text>
+          <text x="226" y="147" text-anchor="middle" fill="#5A6472" font-size="9.5">switch</text>`;
+    // switch leg up
+    s += `<path d="M226 115 V60 H${x0}" fill="none" stroke="${branchColor}" stroke-width="2.5" ${dash}/>
+          <text x="240" y="82" fill="#2C64F2" font-size="11">switch leg</text>`;
+    // fixtures across
+    let x = x0;
+    for(let i=0;i<shown;i++){
+      s += `<rect x="${x}" y="40" width="${devW}" height="34" rx="5" fill="#EAF0FE" stroke="#2C64F2" stroke-width="1.4"/>
+            <text x="${x+devW/2}" y="61" text-anchor="middle" fill="#141E2C" font-size="11" font-weight="600">F${i+1}</text>`;
+      if(i<shown-1){
+        s += `<line x1="${x+devW}" y1="57" x2="${x+devW+devGap}" y2="57" stroke="${branchColor}" stroke-width="2.5" ${dash}/>`;
+      }
+      x += devW + devGap;
+    }
+    if(more>0) s += `<text x="${x+4}" y="61" fill="#5A6472" font-size="12" font-weight="600">+${more} more</text>`;
+    s += `<text x="${x0}" y="102" fill="#3A4250" font-size="11.5">daisy chain, fixture to fixture</text>`;
+  } else {
+    // receptacles across on the home run line
+    let x = x0;
+    for(let i=0;i<shown;i++){
+      s += `<circle cx="${x+20}" cy="${hy}" r="17" fill="#EAF0FE" stroke="#2C64F2" stroke-width="1.4"/>
+            <line x1="${x+9}" y1="${hy-6}" x2="${x+31}" y2="${hy-6}" stroke="#2C64F2" stroke-width="1.6"/>
+            <line x1="${x+9}" y1="${hy+6}" x2="${x+31}" y2="${hy+6}" stroke="#2C64F2" stroke-width="1.6"/>`;
+      if(i<shown-1){
+        s += `<line x1="${x+37}" y1="${hy}" x2="${x+37+devGap+4}" y2="${hy}" stroke="${branchColor}" stroke-width="2.5" ${dash}/>`;
+      }
+      x += 40 + devGap + 2;
+    }
+    if(more>0) s += `<text x="${x+4}" y="${hy+4}" fill="#5A6472" font-size="12" font-weight="600">+${more} more</text>`;
+    s += `<text x="${x0}" y="${hy+42}" fill="#3A4250" font-size="11.5">box to box through the walls</text>`;
+  }
+  s += `</svg>`;
+  $('svgHolder').innerHTML = s;
+}
+
+// ================= CHECKS =================
+function card(status,name,detail,why){
+  const label = status==='pass'?'Pass':status==='warn'?'Watch':'Fail';
+  return `<div class="check ${status}">
+    <div class="status">${label}</div>
+    <div class="name">${name}</div>
+    <div class="detail">${detail}</div>
+    <details><summary>Why this rule exists</summary><p>${why}</p></details>
+  </div>`;
+}
+function renderChecks(r){
+  let h='';
+  // 1. circuit loading
+  const loadStatus = r.pct<=85 ? (r.pct<=70?'pass':'warn') : (r.pct<=100?'warn':'fail');
+  h += card(r.pct>100?'fail':loadStatus, 'Circuit loading',
+    `${r.va.toLocaleString()} VA → <b>${r.amps.toFixed(1)}A</b> of ${r.limit}A usable (${r.pct.toFixed(0)}%).` +
+    (r.continuous?' Lighting is a continuous load — 80% of the 20A breaker.':''),
+    `Breakers can only carry 80% of their rating for loads lasting 3+ hours (like lighting). Designers usually load circuits to 50–70% to leave room for changes.`);
+  // 2. device count
+  h += card(r.devOk?'pass':'fail',
+    r.t==='lighting'?'Fixture count':'Receptacle count (180 VA rule)',
+    r.t==='lighting'
+      ? `${r.n} fixtures @ ${r.w}W. Math max at this wattage: <b>${r.maxDev}</b>.`
+      : `${r.n} receptacles. Code max on a 20A circuit: <b>13</b> (2400 VA ÷ 180 VA). Spec practice: 6–8.`,
+    r.t==='lighting'
+      ? `Max fixtures = (volts × 16A) ÷ watts per fixture. At 277V you fit far more fixtures per circuit than at 120V — that's why big buildings run lighting at 277V.`
+      : `NEC assigns every commercial receptacle 180 VA whether anything is plugged in or not. It's a planning number, not a measurement.`);
+  // 3. conduit fill + derating
+  const der = r.derOk;
+  h += card(der?'pass':'fail','Home run pipe: fill & derating',
+    `${r.totalWires} × #12 THHN → <b>${r.emtSize} EMT</b> by fill. ${r.ccc} current-carrying conductors → #12 derated to <b>${r.derAmp.toFixed(0)}A</b> ${der?'(still protects a 20A circuit)':'— can no longer be protected at 20A. Split into more pipes or upsize wire.'}`,
+    `Wires bundled in one pipe can't shed heat. Past 3 current-carrying conductors, each one's rating drops (×0.8 for 4–6, ×0.7 for 7–9, ×0.5 for 10+). Nine CCC — three 2-wire circuits — is the practical max for #12s at 20A, which is why 3/4" EMT with 3 circuits is the standard commercial home run.`);
+  // 4. voltage drop
+  const vdOk = r.vd12p<=3;
+  h += card(vdOk?'pass':(r.wireSize==='#10'?'warn':'fail'),'Voltage drop (to farthest device)',
+    `${r.farthest.toFixed(0)} ft one way. On #12: <b>${r.vd12p.toFixed(1)}%</b>. ` +
+    (vdOk?'Under the 3% target — run it in #12.':`Over 3% — upsize to <b>${r.wireSize}</b> (drops to ${r.vdp.toFixed(1)}%). Bigger wire, bigger labor unit.`),
+    `NEC recommends ≤3% drop on branch circuits. Long runs at 120V hit this fast (~100 ft); 277V gives you over twice the reach — another reason commercial lighting rides at 277V. Rule of thumb: upsize one wire size per ~100 ft at 120V.`);
+  $('checks').innerHTML = h;
+}
+
+// ================= TAKEOFF =================
+function renderTakeoff(r){
+  const mc = state.method==='mc';
+  const wire = r.wireSize.replace('#','');
+  const hrWire = Math.ceil((r.hr+6) * r.totalWires * 1.1);
+  const couplings = Math.max(0, Math.ceil(r.hr/10)-1);
+  const straps = Math.ceil(r.hr/10)+2;
+  const segs = r.t==='lighting' ? r.n : Math.max(0,r.n-1);          // MC segments (incl switch leg)
+  const mcLen = Math.ceil(r.branchLen*1.1);
+  const brWire = Math.ceil((r.branchLen + r.n*2) * 3 * 1.1);
+  let rows='';
+  const row=(i,q,u,n2)=>`<tr><td>${i}</td><td class="qty">${q} ${u}</td><td>${n2}</td></tr>`;
+
+  rows += `<tr class="section"><td colspan="3">HOME RUN (shared across ${r.ckts} circuit${r.ckts>1?'s':''})</td></tr>`;
+  rows += row(`${r.emtSize} EMT`, r.hr,'LF','Panel to first box, incl. vertical drops');
+  rows += row(`${r.emtSize} EMT couplings`, couplings,'EA','10-ft sticks');
+  rows += row(`${r.emtSize} EMT connectors`, 2,'EA','One each end');
+  rows += row('One-hole straps / hangers', straps,'EA',"Every 10', within 3' of boxes");
+  rows += row(`#${wire} THHN cu`, hrWire,'LF',`${r.totalWires} conductors × (${r.hr} ft + makeup) × 1.10 waste`);
+
+  rows += `<tr class="section"><td colspan="3">BRANCH — ${mc?'MC CABLE':'EMT + WIRE'}</td></tr>`;
+  if(mc){
+    rows += row(`${wire}/2 MC cable`, mcLen,'LF', r.t==='lighting'?'Switch leg + fixture-to-fixture, ×1.10':'Box-to-box through walls, ×1.10');
+    rows += row('MC connectors + anti-shorts', segs*2,'EA','2 per segment end');
+    rows += row('MC cable supports', Math.ceil(r.branchLen/6),'EA',"Every 6', within 12\" of boxes");
+  } else {
+    rows += row(`1/2" EMT`, Math.ceil(r.branchLen),'LF','Branch runs in pipe per spec');
+    rows += row(`1/2" connectors + couplings`, segs*2 + Math.ceil(r.branchLen/10),'EA','');
+    rows += row(`#${wire} THHN cu`, brWire,'LF','3 conductors × branch length × 1.10');
+    rows += row('Straps', Math.ceil(r.branchLen/10)+segs,'EA','');
+  }
+
+  rows += `<tr class="section"><td colspan="3">DEVICES & TERMINATIONS</td></tr>`;
+  if(r.t==='lighting'){
+    rows += row('Fixture connections / whips', r.n,'EA','Splice + pigtail at each fixture');
+    rows += row('4" sq box + 1G mud ring', 1,'EA','Switch location');
+    rows += row('Single-pole switch, spec grade + plate', 1,'EA','20A rated');
+  } else {
+    rows += row('4" sq box + 1G mud ring', r.n,'EA','One per receptacle');
+    rows += row('Duplex receptacle, spec grade + plate', r.n,'EA','20A, NEMA 5-20R');
+  }
+  rows += row('20A 1-pole breaker + termination', 1,'EA','If not in gear package');
+
+  $('takeoff').innerHTML = `<tr><th>Item</th><th style="text-align:right">Qty</th><th>Assembly note</th></tr>`+rows;
+  $('tkFoot').textContent = mc
+    ? 'MC branch wiring installs at roughly 40–60% of the labor of the same run in EMT — the single biggest spec-driven swing on branch work.'
+    : 'Full-pipe branch spec: expect roughly 1.5–2× the branch labor vs. MC. Confirm the spec section before pricing.';
+}
+
+recalc();
+</script>
+</body>
+</html>
