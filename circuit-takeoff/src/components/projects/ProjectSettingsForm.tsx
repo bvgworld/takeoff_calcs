@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { BranchMethod, ProjectSettings } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 
 export function ProjectSettingsForm({
   projectId,
@@ -14,6 +15,7 @@ export function ProjectSettingsForm({
   settings: ProjectSettings;
 }) {
   const router = useRouter();
+  const { showError } = useToast();
   const [s, setS] = useState<ProjectSettings>(initial);
   const [busy, setBusy] = useState(false);
 
@@ -21,8 +23,7 @@ export function ProjectSettingsForm({
     setS((prev) => ({ ...prev, [key]: Number(v) }));
   }
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function saveSettings() {
     setBusy(true);
     const supabase = createClient();
     const { error } = await supabase
@@ -30,8 +31,13 @@ export function ProjectSettingsForm({
       .update({ settings: s })
       .eq("id", projectId);
     setBusy(false);
-    if (error) alert(error.message);
+    if (error) showError(error.message, () => void saveSettings());
     else router.refresh();
+  }
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    await saveSettings();
   }
 
   const field = (

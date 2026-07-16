@@ -16,6 +16,9 @@ import { CalibrateDialog } from "./CalibrateDialog";
 import { DeviceShape } from "./DeviceShape";
 import { SheetSidePanel } from "./SheetSidePanel";
 import { RouteLayer } from "./RouteLayer";
+import { CircuitLegend } from "./CircuitLegend";
+import { TakeoffSummaryCard } from "@/components/takeoff/TakeoffSummaryCard";
+import { useToast } from "@/components/ui/Toast";
 import { createClient } from "@/lib/supabase/client";
 import {
   formatFtIn,
@@ -26,6 +29,7 @@ import {
 import { countByType, defaultAttrs } from "@/lib/devices";
 import { routeCircuit } from "@/lib/routing";
 import { autoGroupDevices } from "@/lib/auto-group";
+import { buildProjectTakeoff, summarizeTakeoff } from "@/lib/takeoff";
 import type {
   Circuit,
   CodeCheck,
@@ -36,6 +40,11 @@ import type {
   Route,
 } from "@/lib/types";
 import { DEFAULT_SETTINGS } from "@/lib/types";
+
+type UndoAction =
+  | { kind: "stamp"; device: Device }
+  | { kind: "delete"; devices: Device[] }
+  | { kind: "move"; before: { id: string; x: number; y: number }[] };
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 8;
@@ -75,6 +84,7 @@ export function SheetViewer({
   backHref,
 }: Props) {
   const settings = settingsProp || DEFAULT_SETTINGS;
+  const { showError } = useToast();
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
@@ -90,8 +100,15 @@ export function SheetViewer({
     new Map()
   );
   const devicesRef = useRef<Device[]>([]);
+  const undoRef = useRef<UndoAction | null>(null);
+  const moveBeforeRef = useRef<{ id: string; x: number; y: number }[] | null>(
+    null
+  );
 
   const [tool, setTool] = useState<Tool>("select");
+  const [lastStampTool, setLastStampTool] =
+    useState<Tool>("stamp-fixture");
+  const [sheetLoading, setSheetLoading] = useState(true);
   const [ftPerPx, setFtPerPx] = useState<number | null>(initialFtPerPx);
   const [p1, setP1] = useState<Point | null>(null);
   const [cursor, setCursor] = useState<Point | null>(null);
@@ -139,11 +156,16 @@ export function SheetViewer({
   // Load devices, circuits, routes
   useEffect(() => {
     const supabase = createClient();
+    setSheetLoading(true);
     void (async () => {
-      const [{ data: devs }, { data: ckts }] = await Promise.all([
-        supabase.from("devices").select("*").eq("sheet_id", sheetId),
-        supabase.from("circuits").select("*").eq("sheet_id", sheetId),
-      ]);
+      const [{ data: devs, error: de }, { data: ckts, error: ce }] =
+        await Promise.all([
+          supabase.from("devices").select("*").eq("sheet_id", sheetId),
+          supabase.from("circuits").select("*").eq("sheet_id", sheetId),
+        ]);
+      if (de || ce) {
+        showError(de?.message || ce?.message || "Failed to load sheet data");
+      }
       setDevices((devs as Device[]) || []);
       const circuitRows = (ckts as Circuit[]) || [];
       setCircuits(circuitRows);
@@ -157,8 +179,9 @@ export function SheetViewer({
       } else {
         setRoutes([]);
       }
+      setSheetLoading(false);
     })();
-  }, [sheetId]);
+  }, [sheetId, showError]);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -195,17 +218,53 @@ export function SheetViewer({
   }, [stamping]);
 
   useEffect(() => {
+    const typing = (t: EventTarget | null) =>
+      t instanceof HTMLInputElement ||
+      t instanceof HTMLTextAreaElement ||
+      t instanceof HTMLSelectElement ||
+      (t instanceof HTMLElement && t.isContentEditable);
+
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && stamping) {
+      if (typing(e.target)) return;
+
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        void performUndo();
+        return;
+      }
+
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setCalibratePending(null);
+        setMeasureResult(null);
+        setP1(null);
+        setCursor(null);
+        setLasso(null);
+        lassoRef.current = null;
         selectTool("select");
         return;
       }
+
+      if (e.key === "v" || e.key === "V") {
+        e.preventDefault();
+        selectTool("select");
+        return;
+      }
+      if (e.key === "m" || e.key === "M") {
+        e.preventDefault();
+        selectTool("measure");
+        return;
+      }
+      if (e.key === "s" || e.key === "S") {
+        e.preventDefault();
+        selectTool(lastStampTool);
+        return;
+      }
+
       if (
         (e.key === "Delete" || e.key === "Backspace") &&
         tool === "select" &&
-        selectedIds.length > 0 &&
-        !(e.target instanceof HTMLInputElement) &&
-        !(e.target instanceof HTMLTextAreaElement)
+        selectedIds.length > 0
       ) {
         e.preventDefault();
         void deleteSelected();
@@ -214,7 +273,7 @@ export function SheetViewer({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stamping, tool, selectedIds]);
+  }, [tool, selectedIds, lastStampTool]);
 
   const fitToScreen = useCallback(() => {
     if (!size.w || !size.h || !imageW || !imageH) return;
@@ -252,6 +311,7 @@ export function SheetViewer({
 
   function selectTool(t: Tool) {
     setTool(t);
+    if (t.startsWith("stamp-")) setLastStampTool(t);
     setP1(null);
     setCursor(null);
     setLasso(null);
@@ -273,9 +333,80 @@ export function SheetViewer({
       setTimeout(() => {
         dragTimers.current.delete(id);
         const supabase = createClient();
-        void supabase.from("devices").update({ x, y }).eq("id", id);
+        void (async () => {
+          const { error } = await supabase
+            .from("devices")
+            .update({ x, y })
+            .eq("id", id);
+          if (error) {
+            showError(error.message, () => schedulePosPersist(id, x, y));
+          }
+        })();
       }, DRAG_DEBOUNCE_MS)
     );
+  }
+
+  async function performUndo() {
+    const action = undoRef.current;
+    if (!action) return;
+    undoRef.current = null;
+    const supabase = createClient();
+
+    if (action.kind === "stamp") {
+      setDevices((prev) => prev.filter((d) => d.id !== action.device.id));
+      setSelectedIds((prev) => prev.filter((id) => id !== action.device.id));
+      const { error } = await supabase
+        .from("devices")
+        .delete()
+        .eq("id", action.device.id);
+      if (error) {
+        setDevices((prev) => [...prev, action.device]);
+        showError(error.message);
+      }
+      return;
+    }
+
+    if (action.kind === "delete") {
+      setDevices((prev) => [...prev, ...action.devices]);
+      const { error } = await supabase.from("devices").insert(
+        action.devices.map((d) => ({
+          id: d.id,
+          sheet_id: d.sheet_id,
+          type: d.type,
+          x: d.x,
+          y: d.y,
+          attrs: d.attrs,
+          circuit_id: d.circuit_id,
+        }))
+      );
+      if (error) {
+        setDevices((prev) =>
+          prev.filter((d) => !action.devices.some((x) => x.id === d.id))
+        );
+        showError(error.message);
+      }
+      return;
+    }
+
+    if (action.kind === "move") {
+      const map = new Map(action.before.map((b) => [b.id, b]));
+      setDevices((prev) =>
+        prev.map((d) => {
+          const b = map.get(d.id);
+          return b ? { ...d, x: b.x, y: b.y } : d;
+        })
+      );
+      for (const b of action.before) {
+        const { error } = await supabase
+          .from("devices")
+          .update({ x: b.x, y: b.y })
+          .eq("id", b.id);
+        if (error) {
+          showError(error.message);
+          break;
+        }
+      }
+    }
   }
 
   async function stampAt(pt: Point) {
@@ -310,29 +441,33 @@ export function SheetViewer({
       .single();
     if (error) {
       setDevices((prev) => prev.filter((d) => d.id !== id));
-      alert(error.message);
+      showError(error.message, () => void stampAt(pt));
       return;
     }
+    const saved = data as Device;
+    undoRef.current = { kind: "stamp", device: saved };
     setDevices((prev) =>
-      prev.map((d) => (d.id === id ? (data as Device) : d))
+      prev.map((d) => (d.id === id ? saved : d))
     );
   }
 
   async function deleteSelected() {
     const ids = [...selectedIds];
     if (!ids.length) return;
+    const removed = devicesRef.current.filter((d) => ids.includes(d.id));
+    undoRef.current = { kind: "delete", devices: removed };
     setDevices((prev) => prev.filter((d) => !ids.includes(d.id)));
     setSelectedIds([]);
     const supabase = createClient();
     const { error } = await supabase.from("devices").delete().in("id", ids);
     if (error) {
-      alert(error.message);
-      // reload
+      showError(error.message, () => void deleteSelected());
       const { data } = await supabase
         .from("devices")
         .select("*")
         .eq("sheet_id", sheetId);
       setDevices((data as Device[]) || []);
+      undoRef.current = null;
     }
   }
 
@@ -345,17 +480,18 @@ export function SheetViewer({
       )
     );
     const supabase = createClient();
-    await Promise.all(
-      ids.map(async (id) => {
-        const d = devicesRef.current.find((x) => x.id === id);
-        const attrs = { ...(d?.attrs || {}), ...patch };
-        const { error } = await supabase
-          .from("devices")
-          .update({ attrs })
-          .eq("id", id);
-        if (error) console.error(error);
-      })
-    );
+    for (const id of ids) {
+      const d = devicesRef.current.find((x) => x.id === id);
+      const attrs = { ...(d?.attrs || {}), ...patch };
+      const { error } = await supabase
+        .from("devices")
+        .update({ attrs })
+        .eq("id", id);
+      if (error) {
+        showError(error.message, () => void persistAttrs(ids, patch));
+        return;
+      }
+    }
   }
 
   function onWheel(e: Konva.KonvaEventObject<WheelEvent>) {
@@ -531,7 +667,7 @@ export function SheetViewer({
       .eq("id", sheetId);
     setSaving(false);
     if (error) {
-      alert(error.message);
+      showError(error.message, () => void saveCalibration(feet));
       return;
     }
     setFtPerPx(next);
@@ -568,6 +704,18 @@ export function SheetViewer({
     : null;
 
   const topOffset = calibrated ? "top-12" : "top-16";
+  const legendOffset = calibrated ? "top-[4.75rem]" : "top-24";
+
+  const takeoffSummary = useMemo(() => {
+    const { lines } = buildProjectTakeoff({
+      circuits,
+      devices,
+      routes,
+      settings,
+      ftPerPxBySheetId: ftPerPx ? { [sheetId]: ftPerPx } : {},
+    });
+    return summarizeTakeoff(lines, devices);
+  }, [circuits, devices, routes, settings, ftPerPx, sheetId]);
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#E8EAF0]">
@@ -654,7 +802,10 @@ export function SheetViewer({
           </button>
         ))}
         <span className="h-4 w-px bg-perry-silver" />
-        <span className="text-xs font-semibold tabular-nums text-perry-industrial">
+        <span
+          className="text-xs font-semibold tabular-nums text-perry-industrial"
+          title="V select · S stamp last · M measure · Esc cancel · ⌘Z undo"
+        >
           F: {counts.fixture} · R: {counts.receptacle} · S: {counts.switch} · P:{" "}
           {counts.panel}
         </span>
@@ -667,6 +818,33 @@ export function SheetViewer({
           </>
         )}
       </div>
+
+      <div className={`absolute left-3 z-20 ${legendOffset}`}>
+        <CircuitLegend circuits={circuits} />
+      </div>
+
+      {calibrated && !sheetLoading && devices.length === 0 && (
+        <div
+          className={`absolute left-3 z-20 max-w-sm rounded-lg border border-perry-silver bg-white/95 px-3 py-2 text-xs text-gray-600 shadow-sm ${
+            circuits.length ? "top-32" : legendOffset
+          }`}
+        >
+          <p className="font-semibold text-perry-industrial">Get started</p>
+          <ol className="mt-1 list-decimal space-y-0.5 pl-4">
+            <li>Stamp a Panel, then fixtures / receptacles / switches</li>
+            <li>Open Circuits → New circuit → assign devices</li>
+            <li>Route — footages appear on the takeoff card</li>
+          </ol>
+        </div>
+      )}
+
+      {(sheetLoading || !image) && (
+        <div className="absolute inset-0 right-72 z-30 flex items-center justify-center bg-[#E8EAF0]/80">
+          <p className="rounded-md bg-white px-4 py-2 text-sm font-semibold text-perry-industrial shadow-sm">
+            Loading sheet…
+          </p>
+        </div>
+      )}
 
       {(tool === "calibrate" || tool === "measure" || stamping) && (
         <p className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-md bg-perry-industrial/90 px-3 py-1.5 text-xs text-white">
@@ -745,6 +923,14 @@ export function SheetViewer({
                     return [d.id];
                   });
                 }}
+                onDragStart={() => {
+                  const moveIds = selectedIds.includes(d.id)
+                    ? selectedIds
+                    : [d.id];
+                  moveBeforeRef.current = devicesRef.current
+                    .filter((dev) => moveIds.includes(dev.id))
+                    .map((dev) => ({ id: dev.id, x: dev.x, y: dev.y }));
+                }}
                 onDragMove={(x, y, dx, dy) => {
                   const moveIds = selectedIds.includes(d.id)
                     ? selectedIds
@@ -772,6 +958,22 @@ export function SheetViewer({
                       dev.id === d.id ? { ...dev, x, y } : dev
                     )
                   );
+                  const before = moveBeforeRef.current;
+                  moveBeforeRef.current = null;
+                  if (before?.length) {
+                    const changed = before.some((b) => {
+                      const cur = devicesRef.current.find((x) => x.id === b.id);
+                      return !cur || cur.x !== b.x || cur.y !== b.y;
+                    });
+                    // After setState, devicesRef may still be old; compare to end pos for primary
+                    const primary = before.find((b) => b.id === d.id);
+                    if (
+                      changed ||
+                      (primary && (primary.x !== x || primary.y !== y))
+                    ) {
+                      undoRef.current = { kind: "move", before };
+                    }
+                  }
                 }}
               />
             ))}
@@ -892,6 +1094,8 @@ export function SheetViewer({
         </Stage>
       </div>
 
+      <TakeoffSummaryCard summary={takeoffSummary} />
+
       <SheetSidePanel
         selected={selected}
         onChangeLabel={(label) => {
@@ -915,27 +1119,31 @@ export function SheetViewer({
         onToggleEditRoutes={() => setEditRoutes((v) => !v)}
         checkDetail={checkDetail}
         onCheckClick={setCheckDetail}
-        onNewCircuit={async ({ panelId, ctype, voltage }) => {
-          const supabase = createClient();
-          const nextNum =
-            circuits.reduce((m, c) => Math.max(m, c.number), 0) + 1;
-          const { data, error } = await supabase
-            .from("circuits")
-            .insert({
-              sheet_id: sheetId,
-              panel_device_id: panelId,
-              number: nextNum,
-              ctype,
-              voltage,
-              breaker_amps: 20,
-            })
-            .select("*")
-            .single();
-          if (error) {
-            alert(error.message);
-            return;
-          }
-          setCircuits((prev) => [...prev, data as Circuit]);
+        onNewCircuit={async (opts) => {
+          const run = async () => {
+            const { panelId, ctype, voltage } = opts;
+            const supabase = createClient();
+            const nextNum =
+              circuits.reduce((m, c) => Math.max(m, c.number), 0) + 1;
+            const { data, error } = await supabase
+              .from("circuits")
+              .insert({
+                sheet_id: sheetId,
+                panel_device_id: panelId,
+                number: nextNum,
+                ctype,
+                voltage,
+                breaker_amps: 20,
+              })
+              .select("*")
+              .single();
+            if (error) {
+              showError(error.message, () => void run());
+              return;
+            }
+            setCircuits((prev) => [...prev, data as Circuit]);
+          };
+          await run();
         }}
         onAssignSelected={async (circuitId) => {
           const ids = selectedIds.filter((id) => {
@@ -943,17 +1151,20 @@ export function SheetViewer({
             return d && d.type !== "panel";
           });
           if (!ids.length) return;
-          setDevices((prev) =>
-            prev.map((d) =>
-              ids.includes(d.id) ? { ...d, circuit_id: circuitId } : d
-            )
-          );
-          const supabase = createClient();
-          const { error } = await supabase
-            .from("devices")
-            .update({ circuit_id: circuitId })
-            .in("id", ids);
-          if (error) alert(error.message);
+          const run = async () => {
+            setDevices((prev) =>
+              prev.map((d) =>
+                ids.includes(d.id) ? { ...d, circuit_id: circuitId } : d
+              )
+            );
+            const supabase = createClient();
+            const { error } = await supabase
+              .from("devices")
+              .update({ circuit_id: circuitId })
+              .in("id", ids);
+            if (error) showError(error.message, () => void run());
+          };
+          await run();
         }}
         onAutoGroup={async (ctype, panelId) => {
           const clusters = autoGroupDevices({
@@ -962,7 +1173,7 @@ export function SheetViewer({
             settings,
           });
           if (!clusters.length) {
-            alert("No unassigned devices to group.");
+            showError("No unassigned devices to group.");
             return;
           }
           const supabase = createClient();
@@ -987,7 +1198,7 @@ export function SheetViewer({
               .select("*")
               .single();
             if (error) {
-              alert(error.message);
+              showError(error.message);
               break;
             }
             const ckt = data as Circuit;
@@ -1008,14 +1219,14 @@ export function SheetViewer({
         }}
         onRoute={async (circuitId) => {
           if (!ftPerPx) {
-            alert("Calibrate first.");
+            showError("Calibrate scale before routing.");
             return;
           }
           const circuit = circuits.find((c) => c.id === circuitId);
           if (!circuit) return;
           const panel = devices.find((d) => d.id === circuit.panel_device_id);
           if (!panel) {
-            alert("Panel missing.");
+            showError("Panel missing for this circuit.");
             return;
           }
           const onCkt = devices.filter((d) => d.circuit_id === circuitId);
@@ -1050,7 +1261,7 @@ export function SheetViewer({
               )
               .select("*");
             if (error) {
-              alert(error.message);
+              showError(error.message);
               return;
             }
             setRoutes([...others, ...kept, ...((data as Route[]) || [])]);
@@ -1060,7 +1271,7 @@ export function SheetViewer({
         }}
         onRouteAll={async () => {
           if (!ftPerPx) {
-            alert("Calibrate first.");
+            showError("Calibrate scale before routing.");
             return;
           }
           const supabase = createClient();
@@ -1098,7 +1309,7 @@ export function SheetViewer({
               )
               .select("*");
             if (error) {
-              alert(error.message);
+              showError(error.message);
               break;
             }
             inserted.push(...((data as Route[]) || []));
@@ -1135,7 +1346,7 @@ export function SheetViewer({
             )
             .select("*");
           if (error) {
-            alert(error.message);
+            showError(error.message);
             return;
           }
           setRoutes((prev) => [

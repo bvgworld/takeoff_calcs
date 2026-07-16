@@ -1,10 +1,15 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { NewProjectForm } from "@/components/projects/NewProjectForm";
 import { DeleteProjectButton } from "@/components/projects/DeleteProjectButton";
 import { AppNav } from "@/components/auth/AppNav";
 import type { Project } from "@/lib/types";
+
+export const metadata: Metadata = {
+  title: "Projects",
+};
 
 export default async function ProjectsPage() {
   const supabase = createClient();
@@ -50,8 +55,13 @@ export default async function ProjectsPage() {
             </li>
           ))}
           {!projects?.length && (
-            <li className="sm:col-span-2 rounded-lg border border-dashed border-perry-silver px-4 py-8 text-center text-sm text-gray-500">
-              No projects yet. Create one to get started.
+            <li className="sm:col-span-2 rounded-lg border border-dashed border-perry-silver bg-white px-6 py-12 text-center">
+              <p className="font-display text-lg text-perry-industrial">
+                Create your first project
+              </p>
+              <p className="mt-2 text-sm text-gray-500">
+                Name a job above, then upload a PDF plan sheet to start takeoff.
+              </p>
             </li>
           )}
         </ul>

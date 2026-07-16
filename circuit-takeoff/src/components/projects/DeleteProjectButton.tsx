@@ -4,6 +4,7 @@ import type { MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 
 export function DeleteProjectButton({
   projectId,
@@ -13,6 +14,20 @@ export function DeleteProjectButton({
   projectName: string;
 }) {
   const router = useRouter();
+  const { showError } = useToast();
+
+  async function deleteProject() {
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("projects")
+      .delete()
+      .eq("id", projectId);
+    if (error) {
+      showError(error.message, () => void deleteProject());
+      return;
+    }
+    router.refresh();
+  }
 
   async function onDelete(e: MouseEvent) {
     e.preventDefault();
@@ -21,16 +36,7 @@ export function DeleteProjectButton({
       `Delete project “${projectName}”? This cannot be undone.`
     );
     if (!ok) return;
-    const supabase = createClient();
-    const { error } = await supabase
-      .from("projects")
-      .delete()
-      .eq("id", projectId);
-    if (error) {
-      alert(error.message);
-      return;
-    }
-    router.refresh();
+    await deleteProject();
   }
 
   return (

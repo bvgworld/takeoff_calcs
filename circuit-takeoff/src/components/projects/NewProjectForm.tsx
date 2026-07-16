@@ -5,21 +5,26 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { DEFAULT_SETTINGS } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 
 export function NewProjectForm() {
   const router = useRouter();
+  const { showError } = useToast();
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
 
-  async function onSubmit(e: FormEvent) {
-    e.preventDefault();
+  async function createProject() {
     if (!name.trim()) return;
     setBusy(true);
     const supabase = createClient();
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) {
+      setBusy(false);
+      showError("Not signed in.");
+      return;
+    }
     const { data, error } = await supabase
       .from("projects")
       .insert({
@@ -31,12 +36,17 @@ export function NewProjectForm() {
       .single();
     setBusy(false);
     if (error) {
-      alert(error.message);
+      showError(error.message, () => void createProject());
       return;
     }
     setName("");
     router.push(`/projects/${data.id}`);
     router.refresh();
+  }
+
+  async function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    await createProject();
   }
 
   return (

@@ -11,6 +11,7 @@ type Props = {
   ftPerPx: number | null;
   listening: boolean;
   onSelect: (shiftKey: boolean) => void;
+  onDragStart?: () => void;
   onDragMove: (x: number, y: number, dx: number, dy: number) => void;
   onDragEnd: (x: number, y: number) => void;
 };
@@ -21,6 +22,7 @@ function DeviceShapeInner({
   ftPerPx,
   listening,
   onSelect,
+  onDragStart,
   onDragMove,
   onDragEnd,
 }: Props) {
@@ -45,6 +47,7 @@ function DeviceShapeInner({
       onDragStart={(e) => {
         e.target.setAttr("_ox", e.target.x());
         e.target.setAttr("_oy", e.target.y());
+        onDragStart?.();
       }}
       onDragMove={(e) => {
         const ox = e.target.getAttr("_ox") as number;

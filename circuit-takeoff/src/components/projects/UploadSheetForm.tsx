@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { getPdfPageCount, rasterPdfPage } from "@/lib/pdf";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 
 type Phase =
   | "idle"
@@ -18,6 +19,7 @@ type Phase =
 
 export function UploadSheetForm({ projectId }: { projectId: string }) {
   const router = useRouter();
+  const { showError } = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
@@ -127,8 +129,12 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
       router.refresh();
     } catch (err) {
       console.error(err);
+      const message = err instanceof Error ? err.message : "Upload failed";
       setPhase("error");
-      setMsg(err instanceof Error ? err.message : "Upload failed");
+      setMsg(message);
+      showError(message, () => {
+        if (file) void runUpload(file, pageNumber);
+      });
     }
   }
 

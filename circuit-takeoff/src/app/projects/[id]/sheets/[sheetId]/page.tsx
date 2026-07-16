@@ -1,9 +1,28 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { SheetViewer } from "@/components/canvas/SheetViewer";
 import type { Project, ProjectSettings, Sheet } from "@/lib/types";
 import { DEFAULT_SETTINGS } from "@/lib/types";
+
+export async function generateMetadata({
+  params,
+}: {
+  params: { id: string; sheetId: string };
+}): Promise<Metadata> {
+  const supabase = createClient();
+  const [{ data: project }, { data: sheet }] = await Promise.all([
+    supabase.from("projects").select("name").eq("id", params.id).maybeSingle(),
+    supabase
+      .from("sheets")
+      .select("name")
+      .eq("id", params.sheetId)
+      .maybeSingle(),
+  ]);
+  const title = [sheet?.name, project?.name].filter(Boolean).join(" · ");
+  return { title: title || "Sheet" };
+}
 
 export default async function SheetPage({
   params,
