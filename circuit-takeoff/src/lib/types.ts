@@ -1,7 +1,4 @@
-export type DeviceType = "panel" | "fixture" | "receptacle" | "switch";
-export type CircuitType = "lighting" | "receptacle";
 export type BranchMethod = "mc" | "emt";
-export type RouteKind = "homerun" | "branch" | "switchleg";
 
 export type ProjectSettings = {
   ceiling_height_ft: number;
@@ -25,8 +22,6 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   receptacle_voltage: 120,
 };
 
-export type Point = { x: number; y: number };
-
 export type Project = {
   id: string;
   user_id: string;
@@ -45,60 +40,4 @@ export type Sheet = {
   image_h: number;
   ft_per_px: number | null;
   created_at: string;
-};
-
-export type DeviceAttrs = {
-  label?: string;
-  watts?: number;
-};
-
-export type Device = {
-  id: string;
-  sheet_id: string;
-  type: DeviceType;
-  x: number;
-  y: number;
-  attrs: DeviceAttrs;
-  circuit_id: string | null;
-  created_at: string;
-};
-
-export type Circuit = {
-  id: string;
-  sheet_id: string;
-  panel_device_id: string;
-  number: number;
-  ctype: CircuitType;
-  voltage: number;
-  breaker_amps: number;
-  created_at: string;
-};
-
-export type Route = {
-  id: string;
-  circuit_id: string;
-  kind: RouteKind;
-  path: Point[];
-  plan_length_ft: number;
-  user_edited: boolean;
-  created_at: string;
-};
-
-export type ToolMode =
-  | "pan"
-  | "calibrate"
-  | "stamp-panel"
-  | "stamp-fixture"
-  | "stamp-receptacle"
-  | "stamp-switch"
-  | "select"
-  | "edit-route";
-
-export type CheckStatus = "pass" | "warn" | "fail";
-
-export type CodeCheck = {
-  status: CheckStatus;
-  name: string;
-  detail: string;
-  why: string;
 };
