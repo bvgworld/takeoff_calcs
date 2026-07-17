@@ -18,6 +18,7 @@ import { DeviceShape } from "./DeviceShape";
 import { SheetSidePanel } from "./SheetSidePanel";
 import { RouteLayer } from "./RouteLayer";
 import { CircuitLegend } from "./CircuitLegend";
+import { PdfSharpOverlay } from "./PdfSharpOverlay";
 import { TakeoffSummaryCard } from "@/components/takeoff/TakeoffSummaryCard";
 import { useToast } from "@/components/ui/Toast";
 import { createClient } from "@/lib/supabase/client";
@@ -88,6 +89,10 @@ type Point = { x: number; y: number };
 type Props = {
   sheetId: string;
   imageUrl: string;
+  /** Signed URL for source PDF (sharp-zoom overlay). */
+  pdfUrl?: string | null;
+  /** 1-based page that was rasterized. */
+  pdfPage?: number;
   imageW: number;
   imageH: number;
   initialFtPerPx: number | null;
@@ -101,6 +106,8 @@ type Props = {
 export function SheetViewer({
   sheetId,
   imageUrl,
+  pdfUrl = null,
+  pdfPage = 1,
   imageW,
   imageH,
   initialFtPerPx,
@@ -118,6 +125,8 @@ export function SheetViewer({
   const [size, setSize] = useState({ w: 800, h: 600 });
   const [scale, setScale] = useState(1);
   const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [viewMoving, setViewMoving] = useState(false);
+  const viewMovingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const image = useImage(imageUrl);
   const midPan = useRef<{
     active: boolean;
@@ -599,6 +608,15 @@ export function SheetViewer({
     }
   }
 
+  function markViewMoving() {
+    setViewMoving(true);
+    if (viewMovingTimer.current) clearTimeout(viewMovingTimer.current);
+    viewMovingTimer.current = setTimeout(() => {
+      setViewMoving(false);
+      viewMovingTimer.current = null;
+    }, 120);
+  }
+
   function onWheel(e: Konva.KonvaEventObject<WheelEvent>) {
     e.evt.preventDefault();
     const stage = stageRef.current;
@@ -620,6 +638,7 @@ export function SheetViewer({
       x: (pointer.x - pos.x) / oldScale,
       y: (pointer.y - pos.y) / oldScale,
     };
+    markViewMoving();
     setScale(newScale);
     setPos({
       x: pointer.x - mousePointTo.x * newScale,
@@ -716,6 +735,7 @@ export function SheetViewer({
       const dy = e.evt.clientY - midPan.current.lastY;
       midPan.current.lastX = e.evt.clientX;
       midPan.current.lastY = e.evt.clientY;
+      markViewMoving();
       setPos((p) => ({ x: p.x + dx, y: p.y + dy }));
       return;
     }
@@ -1008,8 +1028,15 @@ export function SheetViewer({
           y={pos.y}
           draggable={tool === "pan"}
           pixelRatio={1}
+          onDragStart={() => {
+            markViewMoving();
+          }}
+          onDragMove={() => {
+            markViewMoving();
+          }}
           onDragEnd={(e) => {
             setPos({ x: e.target.x(), y: e.target.y() });
+            markViewMoving();
           }}
           onWheel={onWheel}
           onMouseDown={onMouseDown}
@@ -1037,6 +1064,18 @@ export function SheetViewer({
                   imageSmoothingEnabled={scale < 1}
                 />
               )}
+              <PdfSharpOverlay
+                pdfUrl={pdfUrl}
+                pdfPage={pdfPage}
+                imageW={imageW}
+                imageH={imageH}
+                scale={scale}
+                pos={pos}
+                stageW={Math.max(100, size.w)}
+                stageH={size.h}
+                rotationDeg={rotation}
+                viewMoving={viewMoving}
+              />
               {devices.map((d) => (
                 <DeviceShape
                   key={d.id}

@@ -58,6 +58,10 @@ export default async function SheetPage({
     .from("plans")
     .createSignedUrl(s.image_path, 60 * 60 * 4);
 
+  const { data: pdfSigned } = await supabase.storage
+    .from("plans")
+    .createSignedUrl(s.pdf_path, 60 * 60 * 4);
+
   if (!signed?.signedUrl) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-perry-white p-6">
@@ -84,6 +88,8 @@ export default async function SheetPage({
     <SheetViewer
       sheetId={s.id}
       imageUrl={signed.signedUrl}
+      pdfUrl={pdfSigned?.signedUrl ?? null}
+      pdfPage={s.pdf_page ?? 1}
       imageW={s.image_w}
       imageH={s.image_h}
       initialFtPerPx={s.ft_per_px}

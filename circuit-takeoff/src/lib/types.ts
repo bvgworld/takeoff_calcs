@@ -48,8 +48,10 @@ export type Sheet = {
   ft_per_px: number | null;
   /** Display-only Konva rotation; coords stay in unrotated image space. */
   rotation?: SheetRotation;
-  /** Actual raster DPI after 6000px cap; null on legacy uploads. */
+  /** Actual raster DPI after 12000px cap; null on legacy uploads. */
   render_dpi?: number | null;
+  /** 1-based PDF page that was rasterized (sharp-zoom overlay). */
+  pdf_page?: number;
   created_at: string;
 };
 

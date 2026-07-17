@@ -3,9 +3,11 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { getPdfPageCount, rasterPdfPage } from "@/lib/pdf";
+import { getPdfPageCount, rasterPdfPage, TARGET_DPI } from "@/lib/pdf";
 import { Button } from "@/components/ui/Button";
 import { useToast } from "@/components/ui/Toast";
+
+const PNG_WARN_BYTES = 40 * 1024 * 1024;
 
 type Phase =
   | "idle"
@@ -24,6 +26,7 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
   const [phase, setPhase] = useState<Phase>("idle");
   const [progress, setProgress] = useState(0);
   const [msg, setMsg] = useState("");
+  const [warn, setWarn] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [pageCount, setPageCount] = useState(1);
   const [page, setPage] = useState(1);
@@ -31,6 +34,7 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
   async function onFilePicked(f: File | null) {
     if (!f) return;
     setFile(f);
+    setWarn("");
     setPhase("reading");
     setMsg("Reading PDF…");
     setProgress(5);
@@ -54,7 +58,8 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
 
   async function runUpload(f: File, pageNumber: number) {
     setPhase("rasterizing");
-    setMsg(`Rasterizing page ${pageNumber} (~150 DPI)…`);
+    setWarn("");
+    setMsg(`Rasterizing page ${pageNumber} (~${TARGET_DPI} DPI)…`);
     setProgress(20);
     try {
       const supabase = createClient();
@@ -65,10 +70,16 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
 
       const { blob, width, height, renderDpi } = await rasterPdfPage(
         f,
-        pageNumber,
-        150
+        pageNumber
       );
       setProgress(45);
+
+      if (blob.size > PNG_WARN_BYTES) {
+        const mb = (blob.size / (1024 * 1024)).toFixed(0);
+        setWarn(
+          `Raster PNG is ~${mb} MB (over 40 MB). Upload will proceed but may be slow.`
+        );
+      }
 
       const sheetId = crypto.randomUUID();
       // First folder = auth user id so storage RLS from migration 001/003 matches.
@@ -92,7 +103,11 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
       setProgress(70);
 
       setPhase("uploading-png");
-      setMsg("Uploading PNG…");
+      setMsg(
+        blob.size > PNG_WARN_BYTES
+          ? "Uploading large PNG (this may take a while)…"
+          : "Uploading PNG…"
+      );
       const { error: imgErr } = await supabase.storage
         .from("plans")
         .upload(imagePath, blob, {
@@ -122,6 +137,7 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
           image_h: height,
           rotation: 0,
           render_dpi: renderDpi,
+          pdf_page: pageNumber,
         })
         .select("id")
         .single();
@@ -173,6 +189,10 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
         Upload sheet
       </Button>
 
+      {warn && (
+        <p className="max-w-sm text-xs text-amber-700">{warn}</p>
+      )}
+
       {phase === "pick-page" && file && (
         <div className="w-full max-w-sm rounded-lg border border-perry-silver bg-white p-3 text-left shadow-sm">
           <p className="text-xs text-gray-600">{msg}</p>
@@ -198,6 +218,7 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
                 setPhase("idle");
                 setFile(null);
                 setMsg("");
+                setWarn("");
                 setProgress(0);
               }}
             >
@@ -222,6 +243,7 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
             />
           </div>
           <p className="mt-1 text-xs text-gray-500">{msg}</p>
+          {warn && <p className="mt-1 text-xs text-amber-700">{warn}</p>}
         </div>
       )}
 

@@ -1,7 +1,8 @@
 /**
  * Scale helpers: parse real-world distances, format badges / measures.
  * Raster assumed ~150 DPI for architectural-scale approximation when
- * nearestArchScale has no stored render_dpi.
+ * nearestArchScale has no stored render_dpi (legacy sheets).
+ * New uploads store actual render_dpi (300 target, 12000px cap).
  */
 
 const ASSUMED_DPI = 150;

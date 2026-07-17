@@ -1,10 +1,15 @@
 /**
  * Client-only PDF helpers (pdfjs-dist).
- * Raster targets ~150 DPI; longest edge capped at 6000px.
+ * Raster targets 300 DPI; longest edge capped at 12000px.
+ * renderDpi is the ACTUAL effective DPI after the cap (for scale presets).
  */
 
-const TARGET_DPI = 150;
-const MAX_EDGE = 6000;
+import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
+
+export const TARGET_DPI = 300;
+export const MAX_EDGE = 12000;
+/** Sharp-zoom tile canvas cap (per side). */
+export const SHARP_MAX_EDGE = 4096;
 
 async function loadPdfjs() {
   const pdfjs = await import("pdfjs-dist");
@@ -73,4 +78,142 @@ export async function rasterPdfPage(
     height: canvas.height,
     renderDpi,
   };
+}
+
+/** Session cache: signed URL → document promise. */
+const docCache = new Map<string, Promise<PDFDocumentProxy>>();
+
+export function getCachedPdfDocument(
+  url: string
+): Promise<PDFDocumentProxy> {
+  let p = docCache.get(url);
+  if (!p) {
+    p = (async () => {
+      const pdfjs = await loadPdfjs();
+      return pdfjs.getDocument({ url, withCredentials: false }).promise;
+    })();
+    docCache.set(url, p);
+    p.catch(() => {
+      docCache.delete(url);
+    });
+  }
+  return p;
+}
+
+export function clearPdfDocumentCache(url?: string) {
+  if (url) docCache.delete(url);
+  else docCache.clear();
+}
+
+export type ImageRect = { x: number; y: number; w: number; h: number };
+
+/**
+ * Render a region of a PDF page into an offscreen canvas for sharp zoom.
+ * Region is in base-raster image pixel space (same coords as devices).
+ * Output canvas is capped at SHARP_MAX_EDGE per side.
+ */
+export async function renderPdfImageRegion(opts: {
+  page: PDFPageProxy;
+  /** Base raster width/height (sheet image_w / image_h). */
+  imageW: number;
+  imageH: number;
+  region: ImageRect;
+  /** Stage zoom (1 = 100%). */
+  viewScale: number;
+}): Promise<{ canvas: HTMLCanvasElement; region: ImageRect } | null> {
+  const { page, imageW, imageH, viewScale } = opts;
+  const region = clampRect(opts.region, imageW, imageH);
+  if (region.w < 2 || region.h < 2) return null;
+
+  let outW = Math.ceil(region.w * viewScale);
+  let outH = Math.ceil(region.h * viewScale);
+  const long = Math.max(outW, outH);
+  if (long > SHARP_MAX_EDGE) {
+    const k = SHARP_MAX_EDGE / long;
+    outW = Math.max(1, Math.floor(outW * k));
+    outH = Math.max(1, Math.floor(outH * k));
+  }
+
+  const baseVp = page.getViewport({ scale: 1 });
+  // PDF points → base image pixels
+  const sx = imageW / baseVp.width;
+  const sy = imageH / baseVp.height;
+  // Canvas pixels per PDF point (uniform from X; Y uses matching page mapping)
+  const pdfScale = (outW / region.w) * sx;
+
+  const viewport = page.getViewport({ scale: pdfScale });
+  const offsetX = -(region.x / sx) * pdfScale;
+  const offsetY = -(region.y / sy) * pdfScale;
+
+  const canvas = document.createElement("canvas");
+  canvas.width = outW;
+  canvas.height = outH;
+  const ctx = canvas.getContext("2d", { alpha: false });
+  if (!ctx) return null;
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, outW, outH);
+
+  await page.render({
+    canvasContext: ctx,
+    canvas,
+    viewport,
+    transform: [1, 0, 0, 1, offsetX, offsetY],
+  }).promise;
+
+  return { canvas, region };
+}
+
+function clampRect(r: ImageRect, imageW: number, imageH: number): ImageRect {
+  const x = Math.max(0, Math.min(imageW, r.x));
+  const y = Math.max(0, Math.min(imageH, r.y));
+  const x2 = Math.max(0, Math.min(imageW, r.x + r.w));
+  const y2 = Math.max(0, Math.min(imageH, r.y + r.h));
+  return { x, y, w: Math.max(0, x2 - x), h: Math.max(0, y2 - y) };
+}
+
+/**
+ * AABB of the stage viewport in unrotated image (content-group local) space.
+ */
+export function visibleImageRect(opts: {
+  stageW: number;
+  stageH: number;
+  scale: number;
+  pos: { x: number; y: number };
+  imageW: number;
+  imageH: number;
+  rotationDeg: number;
+  /** Extra margin in image pixels. */
+  pad?: number;
+}): ImageRect {
+  const { stageW, stageH, scale, pos, imageW, imageH, rotationDeg } = opts;
+  const pad = opts.pad ?? 32;
+  const corners = [
+    { x: (0 - pos.x) / scale, y: (0 - pos.y) / scale },
+    { x: (stageW - pos.x) / scale, y: (0 - pos.y) / scale },
+    { x: (stageW - pos.x) / scale, y: (stageH - pos.y) / scale },
+    { x: (0 - pos.x) / scale, y: (stageH - pos.y) / scale },
+  ];
+  const cx = imageW / 2;
+  const cy = imageH / 2;
+  const rad = (-rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const locals = corners.map((p) => {
+    const dx = p.x - cx;
+    const dy = p.y - cy;
+    return {
+      x: dx * cos - dy * sin + cx,
+      y: dx * sin + dy * cos + cy,
+    };
+  });
+  let minX = Math.min(...locals.map((p) => p.x)) - pad;
+  let minY = Math.min(...locals.map((p) => p.y)) - pad;
+  let maxX = Math.max(...locals.map((p) => p.x)) + pad;
+  let maxY = Math.max(...locals.map((p) => p.y)) + pad;
+  minX = Math.max(0, minX);
+  minY = Math.max(0, minY);
+  maxX = Math.min(imageW, maxX);
+  maxY = Math.min(imageH, maxY);
+  return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
 }
