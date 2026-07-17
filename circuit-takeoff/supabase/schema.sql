@@ -1,7 +1,11 @@
 -- Run in the Supabase SQL editor (in order):
 --   migrations/001_initial_schema.sql
 --   migrations/003_storage_plans_fix_rls.sql
+--   migrations/004_sheet_rotation_render_dpi.sql
+--   migrations/005_device_catalog.sql
 --
 -- 001: tables, RLS, private `plans` bucket
 -- 003: storage RLS for {userId}/{projectId}/{sheetId}/... (and projectId-first paths)
+-- 004: sheets.rotation + sheets.render_dpi
+-- 005: devices.catalog_id + expanded device types
 -- (002 is superseded by 003 — safe to skip if you never ran it)

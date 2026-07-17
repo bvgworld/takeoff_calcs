@@ -18,6 +18,7 @@ type Props = {
   selected: Device[];
   onChangeLabel: (label: string) => void;
   onChangeWatts: (watts: number) => void;
+  onChangeDimming: (dimming: boolean) => void;
   devices: Device[];
   circuits: Circuit[];
   routes: Route[];
@@ -74,6 +75,7 @@ export function SheetSidePanel(props: Props) {
             selected={props.selected}
             onChangeLabel={props.onChangeLabel}
             onChangeWatts={props.onChangeWatts}
+            onChangeDimming={props.onChangeDimming}
           />
         ) : (
           <CircuitsTab {...props} />
@@ -119,6 +121,9 @@ function CircuitsTab({
   const panels = devices.filter((d) => d.type === "panel");
   const [panelId, setPanelId] = useState("");
   const [ctype, setCtype] = useState<"lighting" | "receptacle">("lighting");
+  const [groupType, setGroupType] = useState<"lighting" | "receptacle">(
+    "lighting"
+  );
   const [assignId, setAssignId] = useState("");
 
   useEffect(() => {
@@ -198,23 +203,45 @@ function CircuitsTab({
             </option>
           ))}
         </select>
-        <Button
-          type="button"
-          variant="secondary"
-          className="w-full"
-          disabled={!assignId || selected.length === 0}
-          onClick={() => onAssignSelected(assignId)}
+        <span
+          className="block"
+          title={
+            selected.length === 0
+              ? "Select devices with the lasso first."
+              : undefined
+          }
         >
-          Assign to circuit ({selected.length})
-        </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            className="w-full"
+            disabled={!assignId || selected.length === 0}
+            onClick={() => onAssignSelected(assignId)}
+          >
+            Assign to circuit ({selected.length})
+          </Button>
+        </span>
+        <label className="block text-[10px] font-semibold uppercase text-gray-500">
+          Auto-group type
+          <select
+            value={groupType}
+            onChange={(e) =>
+              setGroupType(e.target.value as "lighting" | "receptacle")
+            }
+            className="mt-0.5 w-full rounded border border-perry-silver px-2 py-1 text-sm font-normal normal-case"
+          >
+            <option value="lighting">Lighting</option>
+            <option value="receptacle">Receptacles</option>
+          </select>
+        </label>
         <Button
           type="button"
           variant="ghost"
           className="w-full"
           disabled={!activePanel}
-          onClick={() => onAutoGroup(ctype, activePanel)}
+          onClick={() => onAutoGroup(groupType, activePanel)}
         >
-          Auto-group {ctype}
+          Auto-group {groupType === "lighting" ? "lighting" : "receptacles"}
         </Button>
       </section>
 

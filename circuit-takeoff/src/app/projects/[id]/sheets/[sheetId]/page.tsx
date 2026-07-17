@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/server";
 import { SheetViewer } from "@/components/canvas/SheetViewer";
 import type { Project, ProjectSettings, Sheet } from "@/lib/types";
 import { DEFAULT_SETTINGS } from "@/lib/types";
+import { normalizeRotation } from "@/lib/rotation";
 
 export async function generateMetadata({
   params,
@@ -86,6 +87,8 @@ export default async function SheetPage({
       imageW={s.image_w}
       imageH={s.image_h}
       initialFtPerPx={s.ft_per_px}
+      initialRotation={normalizeRotation(s.rotation ?? 0)}
+      initialRenderDpi={s.render_dpi ?? null}
       settings={(p.settings as ProjectSettings) || DEFAULT_SETTINGS}
       title={`${p.name} · ${s.name}`}
       backHref={`/projects/${p.id}`}

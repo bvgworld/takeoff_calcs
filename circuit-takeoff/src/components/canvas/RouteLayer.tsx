@@ -3,6 +3,7 @@
 import { Group, Line, Circle, Arrow } from "react-konva";
 import type { Circuit, Point, Route } from "@/lib/types";
 import { circuitHue, planLengthFt, snapOrthogonalBend } from "@/lib/routing";
+import { pointerInParentLocal } from "@/lib/konva-coords";
 
 type Props = {
   circuits: Circuit[];
@@ -61,6 +62,7 @@ export function RouteLayer({
             {editMode &&
               selected &&
               r.path.map((p, i) => {
+                // Endpoints stay glued to devices — not draggable.
                 if (i === 0 || i === r.path.length - 1) return null;
                 return (
                   <Circle
@@ -73,6 +75,8 @@ export function RouteLayer({
                     strokeWidth={2}
                     draggable
                     onDragMove={(e) => {
+                      const local = pointerInParentLocal(e.target);
+                      if (local) e.target.position(local);
                       const next = snapOrthogonalBend(
                         r.path,
                         i,
@@ -84,6 +88,8 @@ export function RouteLayer({
                       onPathChange(r.id, next, ft, true);
                     }}
                     onDragEnd={(e) => {
+                      const local = pointerInParentLocal(e.target);
+                      if (local) e.target.position(local);
                       const next = snapOrthogonalBend(
                         r.path,
                         i,
@@ -110,7 +116,6 @@ function HomeRunDecor({ path, color }: { path: Point[]; color: string }) {
   const end = path[path.length - 1];
   const second = path[1];
 
-  // Hash marks along first segment near panel
   const marks = 3;
   const hashes = [];
   for (let i = 0; i < marks; i++) {
@@ -133,7 +138,6 @@ function HomeRunDecor({ path, color }: { path: Point[]; color: string }) {
     );
   }
 
-  // Arrow toward entry (end)
   const prev = path[path.length - 2];
   return (
     <Group listening={false}>

@@ -1,3 +1,4 @@
+import { defaultWatts, sumReceptacleYokes } from "./catalog";
 import type { CodeCheck, Device, ProjectSettings } from "./types";
 import { applyLengthAdders } from "./routing";
 import type { RouteKind } from "./types";
@@ -52,17 +53,25 @@ export function runCircuitChecks(input: CheckInput): CheckResult {
 
   const fixtures = devices.filter((d) => d.type === "fixture");
   const recepts = devices.filter((d) => d.type === "receptacle");
-  const n = ctype === "lighting" ? fixtures.length : recepts.length;
+  const yokes = sumReceptacleYokes(recepts);
+  const n = ctype === "lighting" ? fixtures.length : yokes;
   const avgW =
     ctype === "lighting"
-      ? fixtures.reduce((s, d) => s + (d.attrs.watts ?? 36), 0) /
-          Math.max(fixtures.length, 1) || 36
+      ? fixtures.reduce(
+          (s, d) =>
+            s + (d.attrs.watts ?? defaultWatts(d.catalog_id) ?? 36),
+          0
+        ) / Math.max(fixtures.length, 1) || 36
       : 36;
 
   const va =
     ctype === "lighting"
-      ? fixtures.reduce((s, d) => s + (d.attrs.watts ?? 36), 0)
-      : recepts.length * 180;
+      ? fixtures.reduce(
+          (s, d) =>
+            s + (d.attrs.watts ?? defaultWatts(d.catalog_id) ?? 36),
+          0
+        )
+      : yokes * 180;
   const amps = V > 0 ? va / V : 0;
   const continuous = ctype === "lighting";
   const limit = continuous ? breakerAmps * 0.8 : breakerAmps;
@@ -115,13 +124,13 @@ export function runCircuitChecks(input: CheckInput): CheckResult {
     ),
     card(
       devOk ? "pass" : "fail",
-      ctype === "lighting" ? "Fixture count" : "Receptacle count (180 VA)",
+      ctype === "lighting" ? "Fixture count" : "Receptacle yokes (180 VA)",
       ctype === "lighting"
         ? `${n} fixtures @ ~${avgW.toFixed(0)}W. Max: ${maxDev}.`
-        : `${n} receptacles. Code max 13 on 20A; practice 6–8.`,
+        : `${yokes} yokes (${recepts.length} devices). Code max 13 on 20A; practice 6–8.`,
       ctype === "lighting"
         ? "Max fixtures = (V × 16A) ÷ W."
-        : "NEC 180 VA per receptacle for planning."
+        : "NEC 180 VA per yoke (duplex=1, quad=2). Device amp rating does not change this check."
     ),
     card(
       derOk ? "pass" : "fail",

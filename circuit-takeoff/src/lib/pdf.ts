@@ -23,7 +23,13 @@ export async function rasterPdfPage(
   file: File,
   pageNumber: number,
   dpi = TARGET_DPI
-): Promise<{ blob: Blob; width: number; height: number }> {
+): Promise<{
+  blob: Blob;
+  width: number;
+  height: number;
+  /** Output pixels per PDF inch after the edge cap. */
+  renderDpi: number;
+}> {
   const pdfjs = await loadPdfjs();
   const data = new Uint8Array(await file.arrayBuffer());
   const doc = await pdfjs.getDocument({ data }).promise;
@@ -36,6 +42,8 @@ export async function rasterPdfPage(
     scale *= MAX_EDGE / longest;
     viewport = page.getViewport({ scale });
   }
+
+  const renderDpi = scale * 72;
 
   const canvas = document.createElement("canvas");
   canvas.width = Math.floor(viewport.width);
@@ -59,5 +67,10 @@ export async function rasterPdfPage(
     );
   });
 
-  return { blob, width: canvas.width, height: canvas.height };
+  return {
+    blob,
+    width: canvas.width,
+    height: canvas.height,
+    renderDpi,
+  };
 }

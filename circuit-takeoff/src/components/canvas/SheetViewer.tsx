@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Stage,
   Layer,
+  Group,
   Image as KonvaImage,
   Line,
   Circle,
@@ -26,15 +27,31 @@ import {
   isCalibrated,
   pxToFt,
 } from "@/lib/scale";
-import { countByType, defaultAttrs } from "@/lib/devices";
-import { routeCircuit } from "@/lib/routing";
+import {
+  backfillCatalogId,
+  getCatalogEntry,
+  type CatalogEntry,
+} from "@/lib/catalog";
+import {
+  circuitDisplayLabel,
+  countByCategory,
+  defaultAttrsForCatalog,
+} from "@/lib/devices";
+import { StampPicker } from "./StampPicker";
+import { pointerInNodeLocal } from "@/lib/konva-coords";
+import { glueRoutesToMovedDevice, routeCircuit } from "@/lib/routing";
+import {
+  fitSizeForRotation,
+  normalizeRotation,
+  rotateStep,
+  type SheetRotation,
+} from "@/lib/rotation";
 import { autoGroupDevices } from "@/lib/auto-group";
 import { buildProjectTakeoff, summarizeTakeoff } from "@/lib/takeoff";
 import type {
   Circuit,
   CodeCheck,
   Device,
-  DeviceType,
   Point as GeoPoint,
   ProjectSettings,
   Route,
@@ -55,10 +72,7 @@ type Tool =
   | "pan"
   | "calibrate"
   | "measure"
-  | "stamp-panel"
-  | "stamp-fixture"
-  | "stamp-receptacle"
-  | "stamp-switch";
+  | "stamp";
 
 type Point = { x: number; y: number };
 
@@ -68,6 +82,8 @@ type Props = {
   imageW: number;
   imageH: number;
   initialFtPerPx: number | null;
+  initialRotation?: SheetRotation;
+  initialRenderDpi?: number | null;
   settings?: ProjectSettings;
   title?: string;
   backHref?: string;
@@ -79,6 +95,8 @@ export function SheetViewer({
   imageW,
   imageH,
   initialFtPerPx,
+  initialRotation = 0,
+  initialRenderDpi = null,
   settings: settingsProp,
   title,
   backHref,
@@ -87,6 +105,7 @@ export function SheetViewer({
   const { showError } = useToast();
   const containerRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<Konva.Stage>(null);
+  const contentGroupRef = useRef<Konva.Group>(null);
   const [size, setSize] = useState({ w: 800, h: 600 });
   const [scale, setScale] = useState(1);
   const [pos, setPos] = useState({ x: 0, y: 0 });
@@ -104,12 +123,18 @@ export function SheetViewer({
   const moveBeforeRef = useRef<{ id: string; x: number; y: number }[] | null>(
     null
   );
+  const pendingRouteIds = useRef<Set<string>>(new Set());
+  const routesRef = useRef<Route[]>([]);
 
   const [tool, setTool] = useState<Tool>("select");
-  const [lastStampTool, setLastStampTool] =
-    useState<Tool>("stamp-fixture");
+  const [lastCatalogId, setLastCatalogId] = useState("recep-duplex-20");
   const [sheetLoading, setSheetLoading] = useState(true);
   const [ftPerPx, setFtPerPx] = useState<number | null>(initialFtPerPx);
+  const [rotation, setRotation] = useState<SheetRotation>(
+    normalizeRotation(initialRotation ?? 0)
+  );
+  const [renderDpi] = useState<number | null>(initialRenderDpi ?? null);
+  const [calibrateDialogOpen, setCalibrateDialogOpen] = useState(false);
   const [p1, setP1] = useState<Point | null>(null);
   const [cursor, setCursor] = useState<Point | null>(null);
   const [measureResult, setMeasureResult] = useState<{
@@ -140,14 +165,12 @@ export function SheetViewer({
 
   const calibrated = isCalibrated(ftPerPx);
   const pointing = tool === "calibrate" || tool === "measure";
-  const stamping = tool.startsWith("stamp-");
-  const stampType = stamping
-    ? (tool.replace("stamp-", "") as DeviceType)
-    : null;
+  const stamping = tool === "stamp";
+  const stampEntry = stamping ? getCatalogEntry(lastCatalogId) : undefined;
 
   devicesRef.current = devices;
 
-  const counts = useMemo(() => countByType(devices), [devices]);
+  const counts = useMemo(() => countByCategory(devices), [devices]);
   const selected = useMemo(
     () => devices.filter((d) => selectedIds.includes(d.id)),
     [devices, selectedIds]
@@ -166,7 +189,12 @@ export function SheetViewer({
       if (de || ce) {
         showError(de?.message || ce?.message || "Failed to load sheet data");
       }
-      setDevices((devs as Device[]) || []);
+      setDevices(
+        ((devs as Device[]) || []).map((d) => ({
+          ...d,
+          catalog_id: d.catalog_id || backfillCatalogId(d.type),
+        }))
+      );
       const circuitRows = (ckts as Circuit[]) || [];
       setCircuits(circuitRows);
       const ids = circuitRows.map((c) => c.id);
@@ -236,6 +264,7 @@ export function SheetViewer({
       if (e.key === "Escape") {
         e.preventDefault();
         setCalibratePending(null);
+        setCalibrateDialogOpen(false);
         setMeasureResult(null);
         setP1(null);
         setCursor(null);
@@ -257,7 +286,14 @@ export function SheetViewer({
       }
       if (e.key === "s" || e.key === "S") {
         e.preventDefault();
-        selectTool(lastStampTool);
+        selectTool("stamp");
+        return;
+      }
+
+      if (e.code === "Space" || e.key === " ") {
+        e.preventDefault();
+        if (tool === "select") selectTool("stamp");
+        else selectTool("select");
         return;
       }
 
@@ -273,34 +309,38 @@ export function SheetViewer({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tool, selectedIds, lastStampTool]);
+  }, [tool, selectedIds, lastCatalogId]);
 
   const fitToScreen = useCallback(() => {
     if (!size.w || !size.h || !imageW || !imageH) return;
     const pad = 24;
+    const { w: fitW, h: fitH } = fitSizeForRotation(imageW, imageH, rotation);
     const s = Math.min(
-      (size.w - pad) / imageW,
-      (size.h - pad) / imageH,
+      (size.w - pad) / fitW,
+      (size.h - pad) / fitH,
       MAX_SCALE
     );
     const clamped = Math.max(MIN_SCALE, s);
+    // Center the image pivot (rotation origin), not the unrotated top-left.
+    const cx = imageW / 2;
+    const cy = imageH / 2;
     setScale(clamped);
     setPos({
-      x: (size.w - imageW * clamped) / 2,
-      y: (size.h - imageH * clamped) / 2,
+      x: size.w / 2 - cx * clamped,
+      y: size.h / 2 - cy * clamped,
     });
-  }, [size.w, size.h, imageW, imageH]);
+  }, [size.w, size.h, imageW, imageH, rotation]);
 
   useEffect(() => {
     if (image && size.w > 0) fitToScreen();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [image, imageW, imageH, size.w, size.h]);
+  }, [image, imageW, imageH, size.w, size.h, rotation]);
 
-  function toImagePoint(stagePointer: Point): Point {
-    return {
-      x: (stagePointer.x - pos.x) / scale,
-      y: (stagePointer.y - pos.y) / scale,
-    };
+  /** Pointer in unrotated image space (content Group local coords). */
+  function toImagePoint(): Point | null {
+    const g = contentGroupRef.current;
+    if (!g) return null;
+    return pointerInNodeLocal(g);
   }
 
   function cursorFor(t: Tool): string {
@@ -311,18 +351,37 @@ export function SheetViewer({
 
   function selectTool(t: Tool) {
     setTool(t);
-    if (t.startsWith("stamp-")) setLastStampTool(t);
     setP1(null);
     setCursor(null);
     setLasso(null);
     lassoRef.current = null;
     if (t !== "measure") setMeasureResult(null);
-    if (!t.startsWith("stamp-") && t !== "select") setSelectedIds([]);
+    if (t !== "stamp" && t !== "select") setSelectedIds([]);
+    if (t === "calibrate") {
+      setCalibratePending(null);
+      setCalibrateDialogOpen(true);
+    }
     const stage = stageRef.current;
     if (stage) {
       stage.draggable(t === "pan");
       stage.container().style.cursor = cursorFor(t);
     }
+  }
+
+  async function persistRotation(next: SheetRotation) {
+    setRotation(next);
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("sheets")
+      .update({ rotation: next })
+      .eq("id", sheetId);
+    if (error) {
+      showError(error.message, () => void persistRotation(next));
+    }
+  }
+
+  function rotateBy(dir: 1 | -1) {
+    void persistRotation(rotateStep(rotation, dir));
   }
 
   function schedulePosPersist(id: string, x: number, y: number) {
@@ -344,6 +403,30 @@ export function SheetViewer({
         })();
       }, DRAG_DEBOUNCE_MS)
     );
+  }
+
+  routesRef.current = routes;
+
+  function scheduleRoutesPersist() {
+    if (routePersistTimer.current) clearTimeout(routePersistTimer.current);
+    routePersistTimer.current = setTimeout(() => {
+      const ids = Array.from(pendingRouteIds.current);
+      pendingRouteIds.current.clear();
+      if (!ids.length) return;
+      const snap = routesRef.current;
+      const supabase = createClient();
+      for (const id of ids) {
+        const r = snap.find((x) => x.id === id);
+        if (!r) continue;
+        void supabase
+          .from("routes")
+          .update({
+            path: r.path,
+            plan_length_ft: r.plan_length_ft,
+          })
+          .eq("id", id);
+      }
+    }, DRAG_DEBOUNCE_MS);
   }
 
   async function performUndo() {
@@ -373,6 +456,7 @@ export function SheetViewer({
           id: d.id,
           sheet_id: d.sheet_id,
           type: d.type,
+          catalog_id: d.catalog_id,
           x: d.x,
           y: d.y,
           attrs: d.attrs,
@@ -410,13 +494,15 @@ export function SheetViewer({
   }
 
   async function stampAt(pt: Point) {
-    if (!stampType) return;
+    const entry = getCatalogEntry(lastCatalogId);
+    if (!entry) return;
     const id = crypto.randomUUID();
-    const attrs = defaultAttrs(stampType, devicesRef.current);
+    const attrs = defaultAttrsForCatalog(entry.id, devicesRef.current);
     const optimistic: Device = {
       id,
       sheet_id: sheetId,
-      type: stampType,
+      type: entry.category,
+      catalog_id: entry.id,
       x: pt.x,
       y: pt.y,
       attrs,
@@ -432,7 +518,8 @@ export function SheetViewer({
       .insert({
         id,
         sheet_id: sheetId,
-        type: stampType,
+        type: entry.category,
+        catalog_id: entry.id,
         x: pt.x,
         y: pt.y,
         attrs,
@@ -547,9 +634,8 @@ export function SheetViewer({
     if (e.evt.button !== 0) return;
 
     const stage = stageRef.current;
-    const pointer = stage?.getPointerPosition();
-    if (!pointer) return;
-    const pt = toImagePoint(pointer);
+    const pt = toImagePoint();
+    if (!pt) return;
 
     // Clicked a device shape — let DeviceShape handle it
     const targetName = e.target.getClassName?.() || "";
@@ -583,6 +669,7 @@ export function SheetViewer({
         setCalibratePending({ a: p1, b: pt, px });
         setP1(null);
         setCursor(null);
+        setCalibrateDialogOpen(true);
         return;
       }
       if (!calibrated || ftPerPx == null) {
@@ -615,10 +702,8 @@ export function SheetViewer({
       return;
     }
 
-    const stage = stageRef.current;
-    const pointer = stage?.getPointerPosition();
-    if (!pointer) return;
-    const pt = toImagePoint(pointer);
+    const pt = toImagePoint();
+    if (!pt) return;
 
     if (pointing && p1) {
       setCursor(pt);
@@ -672,6 +757,25 @@ export function SheetViewer({
     }
     setFtPerPx(next);
     setCalibratePending(null);
+    setCalibrateDialogOpen(false);
+    selectTool("select");
+  }
+
+  async function savePresetScale(next: number) {
+    setSaving(true);
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("sheets")
+      .update({ ft_per_px: next })
+      .eq("id", sheetId);
+    setSaving(false);
+    if (error) {
+      showError(error.message, () => void savePresetScale(next));
+      return;
+    }
+    setFtPerPx(next);
+    setCalibratePending(null);
+    setCalibrateDialogOpen(false);
     selectTool("select");
   }
 
@@ -757,6 +861,23 @@ export function SheetViewer({
         >
           Fit
         </button>
+        <button
+          type="button"
+          onClick={() => rotateBy(-1)}
+          title="Rotate left 90°"
+          className="rounded-md bg-perry-white px-2 py-1 text-xs font-semibold text-perry-industrial hover:bg-perry-silver/30"
+        >
+          ⟲
+        </button>
+        <button
+          type="button"
+          onClick={() => rotateBy(1)}
+          title="Rotate right 90°"
+          className="rounded-md bg-perry-white px-2 py-1 text-xs font-semibold text-perry-industrial hover:bg-perry-silver/30"
+        >
+          ⟳
+        </button>
+        <span className="text-[10px] tabular-nums text-gray-500">{rotation}°</span>
         <span className="h-4 w-px bg-perry-silver" />
         {(
           [
@@ -780,34 +901,23 @@ export function SheetViewer({
           </button>
         ))}
         <span className="h-4 w-px bg-perry-silver" />
-        {(
-          [
-            ["stamp-panel", "Panel"],
-            ["stamp-fixture", "Fixture"],
-            ["stamp-receptacle", "Receptacle"],
-            ["stamp-switch", "Switch"],
-          ] as const
-        ).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => selectTool(id)}
-            className={`rounded-md px-2 py-1 text-xs font-semibold ${
-              tool === id
-                ? "bg-perry-blue text-white"
-                : "bg-perry-white text-perry-industrial hover:bg-perry-silver/30"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+        <StampPicker
+          activeCatalogId={stamping ? lastCatalogId : null}
+          onPick={(entry: CatalogEntry) => {
+            setLastCatalogId(entry.id);
+            selectTool("stamp");
+          }}
+        />
         <span className="h-4 w-px bg-perry-silver" />
         <span
           className="text-xs font-semibold tabular-nums text-perry-industrial"
-          title="V select · S stamp last · M measure · Esc cancel · ⌘Z undo"
+          title="V select · S stamp · Space select/stamp · M measure · Esc cancel · ⌘/Ctrl+Z undo"
         >
-          F: {counts.fixture} · R: {counts.receptacle} · S: {counts.switch} · P:{" "}
+          F:{counts.fixture} R:{counts.receptacle} S:{counts.switch} P:
           {counts.panel}
+          {counts.fire || counts.headend || counts.thermostat
+            ? ` · LV:${counts.fire + counts.headend + counts.thermostat}`
+            : ""}
         </span>
         {calibrated && ftPerPx != null && (
           <>
@@ -849,8 +959,9 @@ export function SheetViewer({
       {(tool === "calibrate" || tool === "measure" || stamping) && (
         <p className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-md bg-perry-industrial/90 px-3 py-1.5 text-xs text-white">
           {stamping &&
-            `Stamp ${stampType} — click to place · Esc / right-click to exit`}
+            `Stamp ${stampEntry?.label || lastCatalogId} — click to place · Esc / right-click to exit`}
           {tool === "calibrate" &&
+            !calibrateDialogOpen &&
             !calibratePending &&
             (p1
               ? "Click the second point on a known dimension"
@@ -889,207 +1000,248 @@ export function SheetViewer({
           onMouseLeave={onMouseUp}
           perfectDrawEnabled={false}
         >
-          {/* Layer 1 — plan */}
           <Layer listening={tool !== "pan"} perfectDrawEnabled={false}>
-            {image && (
-              <KonvaImage
-                image={image}
-                width={imageW}
-                height={imageH}
-                listening={tool !== "pan"}
-                perfectDrawEnabled={false}
-                imageSmoothingEnabled={scale < 1}
-              />
-            )}
-          </Layer>
-
-          {/* Layer 2 — devices */}
-          <Layer perfectDrawEnabled={false}>
-            {devices.map((d) => (
-              <DeviceShape
-                key={d.id}
-                device={d}
-                selected={selectedIds.includes(d.id)}
-                ftPerPx={ftPerPx}
-                listening={tool === "select" && !editRoutes}
-                onSelect={(shift) => {
-                  if (tool !== "select") return;
-                  setSelectedIds((prev) => {
-                    if (shift) {
-                      return prev.includes(d.id)
-                        ? prev.filter((id) => id !== d.id)
-                        : [...prev, d.id];
-                    }
-                    return [d.id];
-                  });
-                }}
-                onDragStart={() => {
-                  const moveIds = selectedIds.includes(d.id)
-                    ? selectedIds
-                    : [d.id];
-                  moveBeforeRef.current = devicesRef.current
-                    .filter((dev) => moveIds.includes(dev.id))
-                    .map((dev) => ({ id: dev.id, x: dev.x, y: dev.y }));
-                }}
-                onDragMove={(x, y, dx, dy) => {
-                  const moveIds = selectedIds.includes(d.id)
-                    ? selectedIds
-                    : [d.id];
-                  setDevices((prev) =>
-                    prev.map((dev) => {
-                      if (dev.id === d.id) {
-                        schedulePosPersist(dev.id, x, y);
-                        return { ...dev, x, y };
+            <Group
+              ref={contentGroupRef}
+              x={imageW / 2}
+              y={imageH / 2}
+              offsetX={imageW / 2}
+              offsetY={imageH / 2}
+              rotation={rotation}
+            >
+              {image && (
+                <KonvaImage
+                  image={image}
+                  width={imageW}
+                  height={imageH}
+                  listening={tool !== "pan"}
+                  perfectDrawEnabled={false}
+                  imageSmoothingEnabled={scale < 1}
+                />
+              )}
+              {devices.map((d) => (
+                <DeviceShape
+                  key={d.id}
+                  device={d}
+                  selected={selectedIds.includes(d.id)}
+                  ftPerPx={ftPerPx}
+                  viewScale={scale}
+                  listening={tool === "select" && !editRoutes}
+                  onSelect={(shift) => {
+                    if (tool !== "select") return;
+                    setSelectedIds((prev) => {
+                      if (shift) {
+                        return prev.includes(d.id)
+                          ? prev.filter((id) => id !== d.id)
+                          : [...prev, d.id];
                       }
-                      if (moveIds.includes(dev.id)) {
-                        const nx = dev.x + dx;
-                        const ny = dev.y + dy;
-                        schedulePosPersist(dev.id, nx, ny);
-                        return { ...dev, x: nx, y: ny };
-                      }
-                      return dev;
-                    })
-                  );
-                }}
-                onDragEnd={(x, y) => {
-                  schedulePosPersist(d.id, x, y);
-                  setDevices((prev) =>
-                    prev.map((dev) =>
-                      dev.id === d.id ? { ...dev, x, y } : dev
-                    )
-                  );
-                  const before = moveBeforeRef.current;
-                  moveBeforeRef.current = null;
-                  if (before?.length) {
-                    const changed = before.some((b) => {
-                      const cur = devicesRef.current.find((x) => x.id === b.id);
-                      return !cur || cur.x !== b.x || cur.y !== b.y;
+                      return [d.id];
                     });
-                    // After setState, devicesRef may still be old; compare to end pos for primary
-                    const primary = before.find((b) => b.id === d.id);
-                    if (
-                      changed ||
-                      (primary && (primary.x !== x || primary.y !== y))
-                    ) {
-                      undoRef.current = { kind: "move", before };
-                    }
-                  }
-                }}
-              />
-            ))}
-          </Layer>
-
-          {/* Layer 3 — routes */}
-          <Layer perfectDrawEnabled={false}>
-            {ftPerPx && (
-              <RouteLayer
-                circuits={circuits}
-                routes={routes}
-                ftPerPx={ftPerPx}
-                selectedRouteId={selectedRouteId}
-                editMode={editRoutes}
-                onSelectRoute={setSelectedRouteId}
-                onPathChange={(routeId, path, planFt, userEdited) => {
-                  setRoutes((prev) =>
-                    prev.map((r) =>
-                      r.id === routeId
-                        ? {
-                            ...r,
-                            path: path as GeoPoint[],
-                            plan_length_ft: planFt,
-                            user_edited: userEdited,
-                          }
-                        : r
-                    )
-                  );
-                  if (routePersistTimer.current) {
-                    clearTimeout(routePersistTimer.current);
-                  }
-                  routePersistTimer.current = setTimeout(() => {
-                    const supabase = createClient();
-                    void supabase
-                      .from("routes")
-                      .update({
-                        path,
-                        plan_length_ft: planFt,
-                        user_edited: userEdited,
+                  }}
+                  onDragStart={() => {
+                    const moveIds = selectedIds.includes(d.id)
+                      ? selectedIds
+                      : [d.id];
+                    moveBeforeRef.current = devicesRef.current
+                      .filter((dev) => moveIds.includes(dev.id))
+                      .map((dev) => ({ id: dev.id, x: dev.x, y: dev.y }));
+                  }}
+                  onDragMove={(x, y, dx, dy) => {
+                    const moveIds = selectedIds.includes(d.id)
+                      ? selectedIds
+                      : [d.id];
+                    const moves: {
+                      id: string;
+                      from: GeoPoint;
+                      to: GeoPoint;
+                    }[] = [];
+                    setDevices((prev) =>
+                      prev.map((dev) => {
+                        if (dev.id === d.id) {
+                          moves.push({
+                            id: dev.id,
+                            from: { x: dev.x, y: dev.y },
+                            to: { x, y },
+                          });
+                          schedulePosPersist(dev.id, x, y);
+                          return { ...dev, x, y };
+                        }
+                        if (moveIds.includes(dev.id)) {
+                          const nx = dev.x + dx;
+                          const ny = dev.y + dy;
+                          moves.push({
+                            id: dev.id,
+                            from: { x: dev.x, y: dev.y },
+                            to: { x: nx, y: ny },
+                          });
+                          schedulePosPersist(dev.id, nx, ny);
+                          return { ...dev, x: nx, y: ny };
+                        }
+                        return dev;
                       })
-                      .eq("id", routeId);
-                  }, 150);
-                }}
-              />
-            )}
-          </Layer>
-
-          {/* Overlay — measure / calibrate / lasso */}
-          <Layer listening={false}>
-            {liveLine && (
-              <Line
-                points={liveLine}
-                stroke="#A01825"
-                strokeWidth={2 / scale}
-                dash={[8 / scale, 6 / scale]}
-              />
-            )}
-            {p1 && (
-              <Circle
-                x={p1.x}
-                y={p1.y}
-                radius={5 / scale}
-                fill="#A01825"
-                stroke="#fff"
-                strokeWidth={1.5 / scale}
-              />
-            )}
-            {measureLine && (
-              <Line
-                points={measureLine}
-                stroke="#2C64F2"
-                strokeWidth={2 / scale}
-              />
-            )}
-            {measureResult && (
-              <>
-                <Circle
-                  x={measureResult.a.x}
-                  y={measureResult.a.y}
-                  radius={4 / scale}
-                  fill="#2C64F2"
+                    );
+                    if (ftPerPx && moves.length) {
+                      setRoutes((prev) => {
+                        let next = prev;
+                        for (const m of moves) {
+                          const glued = glueRoutesToMovedDevice(
+                            next,
+                            m.from,
+                            m.to,
+                            ftPerPx
+                          );
+                          for (let i = 0; i < glued.length; i++) {
+                            if (glued[i] !== next[i]) {
+                              pendingRouteIds.current.add(glued[i].id);
+                            }
+                          }
+                          next = glued;
+                        }
+                        if (pendingRouteIds.current.size) {
+                          scheduleRoutesPersist();
+                        }
+                        return next;
+                      });
+                    }
+                  }}
+                  onDragEnd={(x, y) => {
+                    schedulePosPersist(d.id, x, y);
+                    setDevices((prev) =>
+                      prev.map((dev) =>
+                        dev.id === d.id ? { ...dev, x, y } : dev
+                      )
+                    );
+                    const before = moveBeforeRef.current;
+                    moveBeforeRef.current = null;
+                    if (before?.length) {
+                      const changed = before.some((b) => {
+                        const cur = devicesRef.current.find((x) => x.id === b.id);
+                        return !cur || cur.x !== b.x || cur.y !== b.y;
+                      });
+                      const primary = before.find((b) => b.id === d.id);
+                      if (
+                        changed ||
+                        (primary && (primary.x !== x || primary.y !== y))
+                      ) {
+                        undoRef.current = { kind: "move", before };
+                      }
+                    }
+                  }}
                 />
-                <Circle
-                  x={measureResult.b.x}
-                  y={measureResult.b.y}
-                  radius={4 / scale}
-                  fill="#2C64F2"
+              ))}
+              {ftPerPx && (
+                <RouteLayer
+                  circuits={circuits}
+                  routes={routes}
+                  ftPerPx={ftPerPx}
+                  selectedRouteId={selectedRouteId}
+                  editMode={editRoutes}
+                  onSelectRoute={setSelectedRouteId}
+                  onPathChange={(routeId, path, planFt, userEdited) => {
+                    setRoutes((prev) =>
+                      prev.map((r) =>
+                        r.id === routeId
+                          ? {
+                              ...r,
+                              path: path as GeoPoint[],
+                              plan_length_ft: planFt,
+                              user_edited: userEdited,
+                            }
+                          : r
+                      )
+                    );
+                    if (routePersistTimer.current) {
+                      clearTimeout(routePersistTimer.current);
+                    }
+                    routePersistTimer.current = setTimeout(() => {
+                      const supabase = createClient();
+                      void supabase
+                        .from("routes")
+                        .update({
+                          path,
+                          plan_length_ft: planFt,
+                          user_edited: userEdited,
+                        })
+                        .eq("id", routeId);
+                    }, 150);
+                  }}
                 />
-              </>
-            )}
-            {measureLabelPos && measureResult && (
-              <Text
-                x={measureLabelPos.x}
-                y={measureLabelPos.y - 18 / scale}
-                text={`${formatFtIn(measureResult.ft)}  (${measureResult.ft.toFixed(2)} ft)`}
-                fontSize={14 / scale}
-                fontFamily="Poppins, sans-serif"
-                fontStyle="bold"
-                fill="#141E2C"
-                stroke="#fff"
-                strokeWidth={3 / scale}
-                fillAfterStrokeEnabled
-              />
-            )}
-            {lassoRect && (
-              <Rect
-                x={lassoRect.x}
-                y={lassoRect.y}
-                width={lassoRect.w}
-                height={lassoRect.h}
-                stroke="#2C64F2"
-                strokeWidth={1 / scale}
-                dash={[6 / scale, 4 / scale]}
-                fill="rgba(44,100,242,0.08)"
-              />
-            )}
+              )}
+              {liveLine && (
+                <Line
+                  points={liveLine}
+                  stroke="#A01825"
+                  strokeWidth={2 / scale}
+                  dash={[8 / scale, 6 / scale]}
+                  listening={false}
+                />
+              )}
+              {p1 && (
+                <Circle
+                  x={p1.x}
+                  y={p1.y}
+                  radius={5 / scale}
+                  fill="#A01825"
+                  stroke="#fff"
+                  strokeWidth={1.5 / scale}
+                  listening={false}
+                />
+              )}
+              {measureLine && (
+                <Line
+                  points={measureLine}
+                  stroke="#2C64F2"
+                  strokeWidth={2 / scale}
+                  listening={false}
+                />
+              )}
+              {measureResult && (
+                <>
+                  <Circle
+                    x={measureResult.a.x}
+                    y={measureResult.a.y}
+                    radius={4 / scale}
+                    fill="#2C64F2"
+                    listening={false}
+                  />
+                  <Circle
+                    x={measureResult.b.x}
+                    y={measureResult.b.y}
+                    radius={4 / scale}
+                    fill="#2C64F2"
+                    listening={false}
+                  />
+                </>
+              )}
+              {measureLabelPos && measureResult && (
+                <Text
+                  x={measureLabelPos.x}
+                  y={measureLabelPos.y - 18 / scale}
+                  text={`${formatFtIn(measureResult.ft)}  (${measureResult.ft.toFixed(2)} ft)`}
+                  fontSize={14 / scale}
+                  fontFamily="Poppins, sans-serif"
+                  fontStyle="bold"
+                  fill="#141E2C"
+                  stroke="#fff"
+                  strokeWidth={3 / scale}
+                  fillAfterStrokeEnabled
+                  listening={false}
+                />
+              )}
+              {lassoRect && (
+                <Rect
+                  x={lassoRect.x}
+                  y={lassoRect.y}
+                  width={lassoRect.w}
+                  height={lassoRect.h}
+                  stroke="#2C64F2"
+                  strokeWidth={1 / scale}
+                  dash={[6 / scale, 4 / scale]}
+                  fill="rgba(44,100,242,0.08)"
+                  listening={false}
+                />
+              )}
+            </Group>
           </Layer>
         </Stage>
       </div>
@@ -1110,13 +1262,25 @@ export function SheetViewer({
             .map((d) => d.id);
           void persistAttrs(ids, { watts });
         }}
+        onChangeDimming={(dimming) => {
+          const ids = selected
+            .filter((d) => d.type === "fixture")
+            .map((d) => d.id);
+          void persistAttrs(ids, { dimming });
+        }}
         devices={devices}
         circuits={circuits}
         routes={routes}
         settings={settings}
         ftPerPx={ftPerPx}
         editRoutes={editRoutes}
-        onToggleEditRoutes={() => setEditRoutes((v) => !v)}
+        onToggleEditRoutes={() => {
+          if (!editRoutes && routes.length === 0) {
+            showError("No routes yet — click Route first.");
+            return;
+          }
+          setEditRoutes((v) => !v);
+        }}
         checkDetail={checkDetail}
         onCheckClick={setCheckDetail}
         onNewCircuit={async (opts) => {
@@ -1230,6 +1394,12 @@ export function SheetViewer({
             return;
           }
           const onCkt = devices.filter((d) => d.circuit_id === circuitId);
+          if (!onCkt.length) {
+            showError(
+              `Circuit ${circuitDisplayLabel(circuit, devices)} has no devices — lasso-select devices and Assign first.`
+            );
+            return;
+          }
           const proposed = routeCircuit({
             panel,
             devicesOnCircuit: onCkt,
@@ -1274,6 +1444,14 @@ export function SheetViewer({
             showError("Calibrate scale before routing.");
             return;
           }
+          const empty = circuits.filter(
+            (c) => !devices.some((d) => d.circuit_id === c.id)
+          );
+          if (empty.length) {
+            showError(
+              `Circuit ${circuitDisplayLabel(empty[0], devices)} has no devices — lasso-select devices and Assign first.`
+            );
+          }
           const supabase = createClient();
           const kept = routes.filter((r) => r.user_edited);
           const cktIds = circuits.map((c) => c.id);
@@ -1289,6 +1467,7 @@ export function SheetViewer({
             const panel = devices.find((d) => d.id === c.panel_device_id);
             if (!panel) continue;
             const onCkt = devices.filter((d) => d.circuit_id === c.id);
+            if (!onCkt.length) continue;
             const proposed = routeCircuit({
               panel,
               devicesOnCircuit: onCkt,
@@ -1356,17 +1535,30 @@ export function SheetViewer({
         }}
       />
 
-      {calibratePending && (
+      {calibrateDialogOpen && (
         <CalibrateDialog
-          pixelDistance={calibratePending.px}
+          pixelDistance={calibratePending?.px ?? null}
+          renderDpi={renderDpi}
           onCancel={() => {
             if (saving) return;
             setCalibratePending(null);
-            selectTool("calibrate");
+            setCalibrateDialogOpen(false);
+            selectTool("select");
           }}
-          onConfirm={(feet) => {
+          onPickPoints={() => {
+            setCalibratePending(null);
+            setCalibrateDialogOpen(false);
+            setTool("calibrate");
+            setP1(null);
+            setCursor(null);
+          }}
+          onConfirmTwoPoint={(feet) => {
             if (saving) return;
             void saveCalibration(feet);
+          }}
+          onConfirmPreset={(next) => {
+            if (saving) return;
+            void savePresetScale(next);
           }}
         />
       )}

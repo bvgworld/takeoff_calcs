@@ -1,82 +1,83 @@
 "use client";
 
 import type { Device } from "@/lib/types";
+import { getCatalogEntry } from "@/lib/catalog";
+import { resolveCatalogId } from "@/lib/devices";
 
 type Props = {
   selected: Device[];
   onChangeLabel: (label: string) => void;
   onChangeWatts: (watts: number) => void;
+  onChangeDimming: (dimming: boolean) => void;
 };
 
 export function DeviceSidePanel({
   selected,
   onChangeLabel,
   onChangeWatts,
+  onChangeDimming,
 }: Props) {
-  if (selected.length === 0) {
+  if (!selected.length) {
     return (
-      <div>
-        <h2 className="font-display text-sm text-perry-industrial">Selection</h2>
-        <p className="mt-3 text-xs text-gray-500">
-          Click a device to select. Shift-click to multi-select. Drag to move.
-          Delete key removes. Lasso-select then assign on the Circuits tab.
-        </p>
-      </div>
+      <p className="text-xs text-gray-500">
+        Select a device to edit its label and attributes.
+      </p>
     );
   }
 
-  const types = Array.from(new Set(selected.map((d) => d.type)));
-  const allFixtures = selected.every((d) => d.type === "fixture");
-  const sameLabel = selected.every(
-    (d) => (d.attrs.label || "") === (selected[0].attrs.label || "")
-  );
-  const labelValue = sameLabel ? selected[0].attrs.label || "" : "";
-  const sameWatts = selected.every(
-    (d) => (d.attrs.watts ?? 36) === (selected[0].attrs.watts ?? 36)
-  );
-  const wattsValue = sameWatts ? String(selected[0].attrs.watts ?? 36) : "";
+  const d = selected[0];
+  const entry = getCatalogEntry(resolveCatalogId(d));
+  const multi = selected.length > 1;
+  const allFixtures = selected.every((x) => x.type === "fixture");
 
   return (
-    <div>
-      <h2 className="font-display text-sm text-perry-industrial">Selection</h2>
-      <p className="mt-1 text-xs text-gray-500">
-        {selected.length > 1 ? `${selected.length} devices` : types[0]}
-      </p>
+    <div className="space-y-3">
+      <div>
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+          Catalog
+        </p>
+        <p className="text-sm font-semibold text-perry-industrial">
+          {multi
+            ? `${selected.length} devices`
+            : entry?.label || d.type}
+        </p>
+        {!multi && (
+          <p className="text-[11px] text-gray-500">{resolveCatalogId(d)}</p>
+        )}
+      </div>
 
-      <label className="mt-4 block text-xs font-semibold uppercase tracking-wide text-gray-500">
-        Type
-        <div className="mt-1 text-sm font-normal normal-case text-perry-industrial">
-          {types.join(", ")}
-          {selected.length > 1 ? ` · ${selected.length}` : ""}
-        </div>
-      </label>
-
-      <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-gray-500">
-        Label
-        <input
-          value={labelValue}
-          placeholder={sameLabel ? "" : "(mixed)"}
-          onChange={(e) => onChangeLabel(e.target.value)}
-          className="mt-1 w-full rounded-md border border-perry-silver px-2 py-1.5 text-sm font-normal normal-case"
-        />
-      </label>
-
-      {allFixtures && (
-        <label className="mt-3 block text-xs font-semibold uppercase tracking-wide text-gray-500">
-          Watts
+      {!multi && (
+        <label className="block text-[10px] font-semibold uppercase text-gray-500">
+          Label
           <input
-            type="number"
-            min={1}
-            max={2000}
-            value={wattsValue}
-            placeholder={sameWatts ? "" : "(mixed)"}
-            onChange={(e) => {
-              const n = Number(e.target.value);
-              if (Number.isFinite(n) && n > 0) onChangeWatts(n);
-            }}
-            className="mt-1 w-full rounded-md border border-perry-silver px-2 py-1.5 text-sm font-normal normal-case"
+            value={d.attrs.label || ""}
+            onChange={(e) => onChangeLabel(e.target.value)}
+            className="mt-0.5 w-full rounded border border-perry-silver px-2 py-1 text-sm font-normal normal-case"
           />
         </label>
+      )}
+
+      {allFixtures && (
+        <>
+          <label className="block text-[10px] font-semibold uppercase text-gray-500">
+            Watts
+            <input
+              type="number"
+              min={1}
+              value={d.attrs.watts ?? entry?.attrs.watts ?? 36}
+              onChange={(e) => onChangeWatts(Number(e.target.value))}
+              className="mt-0.5 w-full rounded border border-perry-silver px-2 py-1 text-sm font-normal normal-case"
+            />
+          </label>
+          <label className="flex items-center gap-2 text-xs text-perry-industrial">
+            <input
+              type="checkbox"
+              checked={!!d.attrs.dimming}
+              onChange={(e) => onChangeDimming(e.target.checked)}
+            />
+            0-10V dimming (LV run)
+          </label>
+        </>
       )}
     </div>
   );

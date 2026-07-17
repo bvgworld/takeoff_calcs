@@ -1,3 +1,7 @@
+import type { CatalogCategory } from "./catalog";
+import type { SheetRotation } from "./rotation";
+export type { SheetRotation };
+
 export type BranchMethod = "mc" | "emt";
 
 export type ProjectSettings = {
@@ -39,20 +43,28 @@ export type Sheet = {
   image_w: number;
   image_h: number;
   ft_per_px: number | null;
+  /** Display-only Konva rotation; coords stay in unrotated image space. */
+  rotation?: SheetRotation;
+  /** Actual raster DPI after 6000px cap; null on legacy uploads. */
+  render_dpi?: number | null;
   created_at: string;
 };
 
-export type DeviceType = "panel" | "fixture" | "receptacle" | "switch";
+/** Coarse type = catalog category (routing / auto-group). */
+export type DeviceType = CatalogCategory;
 
 export type DeviceAttrs = {
   label?: string;
   watts?: number;
+  /** Per-instance: fixture originates a 0-10V LV run (Prompt 10). */
+  dimming?: boolean;
 };
 
 export type Device = {
   id: string;
   sheet_id: string;
   type: DeviceType;
+  catalog_id: string;
   x: number;
   y: number;
   attrs: DeviceAttrs;

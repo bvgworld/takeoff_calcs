@@ -35,6 +35,18 @@ function device(
     sheet_id: SHEET,
     attrs: {},
     circuit_id: "c1",
+    catalog_id:
+      partial.catalog_id ||
+      ({
+        panel: "panel",
+        fixture: "fix-troffer-2x4",
+        receptacle: "recep-duplex-20",
+        switch: "sw-sp",
+        thermostat: "stat-wall",
+        headend: "head-facp",
+        fire: "fire-smoke",
+      } as Record<string, string>)[partial.type] ||
+      "recep-duplex-20",
     created_at: "",
     ...partial,
   };
@@ -256,6 +268,27 @@ describe("shared home-run pipe", () => {
         (l.notes.includes("Shared HR") || l.notes.includes("HR plan+stub"))
     );
     expect(emtHr).toHaveLength(2);
+  });
+});
+
+describe("zero routes → zero LF", () => {
+  it("summary LF is 0 when circuits exist but have no routes", () => {
+    const c = circuit({ id: "c1", number: 1 });
+    const devices = [
+      device({ id: "panel1", type: "panel", x: 0, y: 0, circuit_id: null }),
+      device({ id: "r1", type: "receptacle", x: 50, y: 0 }),
+    ];
+    const { lines } = buildProjectTakeoff({
+      circuits: [c],
+      devices,
+      routes: [],
+      settings,
+      ftPerPxBySheetId: { [SHEET]: FT_PER_PX },
+    });
+    const summary = summarizeTakeoff(lines, devices);
+    expect(summary.emtLf).toBe(0);
+    expect(summary.mcLf).toBe(0);
+    expect(summary.wireLf).toBe(0);
   });
 });
 

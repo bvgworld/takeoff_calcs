@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   applyLengthAdders,
+  glueRoutesToMovedDevice,
   manhattan,
+  moveRouteEndpoint,
   orthogonalPolyline,
   planLengthFt,
   polylineLengthPx,
   primMst,
   routeCircuit,
 } from "./routing";
+import type { Route } from "./types";
 import type { Device, ProjectSettings } from "./types";
 import { DEFAULT_SETTINGS } from "./types";
 
@@ -22,6 +25,18 @@ function device(
     sheet_id: "sheet",
     attrs: {},
     circuit_id: "c1",
+    catalog_id:
+      partial.catalog_id ||
+      ({
+        panel: "panel",
+        fixture: "fix-troffer-2x4",
+        receptacle: "recep-duplex-20",
+        switch: "sw-sp",
+        thermostat: "stat-wall",
+        headend: "head-facp",
+        fire: "fire-smoke",
+      } as Record<string, string>)[partial.type] ||
+      "recep-duplex-20",
     created_at: "",
     ...partial,
   };
@@ -117,5 +132,48 @@ describe("routeCircuit", () => {
     expect(end.x).toBe(50);
     expect(end.y).toBe(0);
     expect(routes.some((r) => r.kind === "switchleg")).toBe(true);
+  });
+});
+
+describe("route endpoint gluing", () => {
+  it("moveRouteEndpoint keeps far bends and restores orthogonality", () => {
+    const path = [
+      { x: 0, y: 0 },
+      { x: 40, y: 0 },
+      { x: 40, y: 30 },
+      { x: 80, y: 30 },
+    ];
+    const next = moveRouteEndpoint(path, "start", { x: 10, y: 5 });
+    expect(next[0]).toEqual({ x: 10, y: 5 });
+    expect(next[next.length - 1]).toEqual({ x: 80, y: 30 });
+    // first bend orthogonal to start and following anchor
+    expect(
+      next[0].x === next[1].x || next[0].y === next[1].y
+    ).toBe(true);
+  });
+
+  it("glueRoutesToMovedDevice updates matching endpoints only", () => {
+    const route: Route = {
+      id: "r1",
+      circuit_id: "c1",
+      kind: "branch",
+      path: [
+        { x: 0, y: 0 },
+        { x: 50, y: 0 },
+        { x: 50, y: 40 },
+      ],
+      plan_length_ft: 90,
+      user_edited: true,
+      created_at: "",
+    };
+    const out = glueRoutesToMovedDevice(
+      [route],
+      { x: 50, y: 40 },
+      { x: 60, y: 55 },
+      1
+    );
+    expect(out[0].path[0]).toEqual({ x: 0, y: 0 });
+    expect(out[0].path[out[0].path.length - 1]).toEqual({ x: 60, y: 55 });
+    expect(out[0].plan_length_ft).toBe(planLengthFt(out[0].path, 1));
   });
 });

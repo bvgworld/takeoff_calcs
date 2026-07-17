@@ -63,7 +63,11 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
       } = await supabase.auth.getUser();
       if (!user) throw new Error("Not signed in");
 
-      const { blob, width, height } = await rasterPdfPage(f, pageNumber, 150);
+      const { blob, width, height, renderDpi } = await rasterPdfPage(
+        f,
+        pageNumber,
+        150
+      );
       setProgress(45);
 
       const sheetId = crypto.randomUUID();
@@ -116,6 +120,8 @@ export function UploadSheetForm({ projectId }: { projectId: string }) {
           image_path: imagePath,
           image_w: width,
           image_h: height,
+          rotation: 0,
+          render_dpi: renderDpi,
         })
         .select("id")
         .single();

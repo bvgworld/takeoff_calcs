@@ -1,4 +1,6 @@
+import { getCatalogEntry } from "./catalog";
 import { runCircuitChecks, farthestFromRoutes } from "./checks";
+import { resolveCatalogId } from "./devices";
 import { applyLengthAdders } from "./routing";
 import type {
   Circuit,
@@ -217,8 +219,9 @@ export function takeoffForCircuit(opts: {
     rows.push({ circuit: label, item, qty, uom, notes });
   };
 
-  // HOME RUN — emit once on pipe owner; conductors = 2n+1 × longest length
-  if (ownsPipe && hrLen > 0) {
+  // HOME RUN — only when a real HR plan length exists (not stub-alone).
+  // Pipe owner emits EMT once; conductors = 2n+1 × longest length.
+  if (ownsPipe && planForPipe > 0) {
     const couplings = Math.max(0, Math.ceil(hrLen / 10) - 1);
     const straps = Math.ceil(hrLen / 10) + 2;
     const hrWire = Math.ceil((hrLen + makeup * hrBoxes) * totalWires * waste);
@@ -290,19 +293,26 @@ export function takeoffForCircuit(opts: {
     push("Straps", Math.ceil(branchLen / 10) + segs, "EA", "");
   }
 
-  if (circuit.ctype === "lighting") {
-    push("Fixture connections / whips", n, "EA", `${n} fixtures`);
-    push('4" sq box + 1G mud ring', switches.length, "EA", "Switch boxes");
-    push(
-      "Single-pole switch + plate",
-      switches.length,
-      "EA",
-      "20A rated"
-    );
-  } else {
-    push('4" sq box + 1G mud ring', n, "EA", "One per receptacle");
-    push("Duplex receptacle + plate", n, "EA", "20A, 5-20R");
+  // Device assemblies from catalog (per subtype)
+  const assemblyDevs = onCkt.filter(
+    (d) => d.type !== "panel" && d.id !== circuit.panel_device_id
+  );
+  const rolled = new Map<string, { qty: number; notes: string }>();
+  for (const d of assemblyDevs) {
+    const entry = getCatalogEntry(resolveCatalogId(d));
+    if (!entry) continue;
+    for (const line of entry.assembly) {
+      const key = `${line.item}|${line.uom}`;
+      const cur = rolled.get(key) || { qty: 0, notes: entry.label };
+      cur.qty += line.qty;
+      rolled.set(key, cur);
+    }
   }
+  Array.from(rolled.entries()).forEach(([key, v]) => {
+    const [item, uom] = key.split("|");
+    push(item, v.qty, uom, v.notes);
+  });
+
   push("20A 1-pole breaker + termination", 1, "EA", "");
 
   return rows;
@@ -413,7 +423,13 @@ export function summarizeTakeoff(
     }
   }
   const deviceCount = devices.filter(
-    (d) => d.type === "fixture" || d.type === "receptacle" || d.type === "switch"
+    (d) =>
+      d.type === "fixture" ||
+      d.type === "receptacle" ||
+      d.type === "switch" ||
+      d.type === "thermostat" ||
+      d.type === "fire" ||
+      d.type === "headend"
   ).length;
   return { emtLf, mcLf, wireLf, deviceCount };
 }

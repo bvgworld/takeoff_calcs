@@ -1,4 +1,4 @@
-import type { Device, Point, ProjectSettings, RouteKind } from "./types";
+import type { Device, Point, ProjectSettings, Route, RouteKind } from "./types";
 
 export function manhattan(a: Point, b: Point): number {
   return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
@@ -20,6 +20,103 @@ export function polylineLengthPx(path: Point[]): number {
 
 export function planLengthFt(path: Point[], ftPerPx: number): number {
   return polylineLengthPx(path) * ftPerPx;
+}
+
+export function nearPoint(a: Point, b: Point, eps = 0.75): boolean {
+  return Math.hypot(a.x - b.x, a.y - b.y) <= eps;
+}
+
+/**
+ * Move a route endpoint and rebuild the adjacent orthogonal bend so the
+ * remainder of the polyline (user edits) stays put.
+ */
+export function moveRouteEndpoint(
+  path: Point[],
+  end: "start" | "end",
+  newPos: Point
+): Point[] {
+  if (path.length === 0) return [{ ...newPos }];
+  if (path.length === 1) return [{ ...newPos }];
+
+  if (end === "start") {
+    if (path.length === 2) return orthogonalPolyline(newPos, path[1]);
+    const bend = path[1];
+    const anchor = path[2];
+    const opt1 = { x: newPos.x, y: anchor.y };
+    const opt2 = { x: anchor.x, y: newPos.y };
+    const d1 = Math.hypot(bend.x - opt1.x, bend.y - opt1.y);
+    const d2 = Math.hypot(bend.x - opt2.x, bend.y - opt2.y);
+    const nextBend = d1 <= d2 ? opt1 : opt2;
+    const next: Point[] = [{ ...newPos }, nextBend, ...path.slice(2).map((p) => ({ ...p }))];
+    if (
+      next[1].x === next[0].x &&
+      next[1].y === next[0].y
+    ) {
+      next.splice(1, 1);
+    } else if (
+      next.length > 2 &&
+      next[1].x === next[2].x &&
+      next[1].y === next[2].y
+    ) {
+      next.splice(1, 1);
+    }
+    return next;
+  }
+
+  const last = path.length - 1;
+  if (path.length === 2) return orthogonalPolyline(path[0], newPos);
+  const bend = path[last - 1];
+  const anchor = path[last - 2];
+  const opt1 = { x: newPos.x, y: anchor.y };
+  const opt2 = { x: anchor.x, y: newPos.y };
+  const d1 = Math.hypot(bend.x - opt1.x, bend.y - opt1.y);
+  const d2 = Math.hypot(bend.x - opt2.x, bend.y - opt2.y);
+  const nextBend = d1 <= d2 ? opt1 : opt2;
+  const next: Point[] = [
+    ...path.slice(0, last - 1).map((p) => ({ ...p })),
+    nextBend,
+    { ...newPos },
+  ];
+  const n = next.length;
+  if (next[n - 2].x === next[n - 1].x && next[n - 2].y === next[n - 1].y) {
+    next.splice(n - 2, 1);
+  } else if (
+    n > 2 &&
+    next[n - 2].x === next[n - 3].x &&
+    next[n - 2].y === next[n - 3].y
+  ) {
+    next.splice(n - 2, 1);
+  }
+  return next;
+}
+
+/** Glue route endpoints that sat on `from` so they follow `to`. */
+export function glueRoutesToMovedDevice(
+  routes: Route[],
+  from: Point,
+  to: Point,
+  ftPerPx: number
+): Route[] {
+  if (nearPoint(from, to, 1e-9)) return routes;
+  return routes.map((r) => {
+    if (!r.path.length) return r;
+    let path = r.path;
+    let changed = false;
+    if (nearPoint(path[0], from)) {
+      path = moveRouteEndpoint(path, "start", to);
+      changed = true;
+    }
+    if (nearPoint(path[path.length - 1], from)) {
+      path = moveRouteEndpoint(path, "end", to);
+      changed = true;
+    }
+    if (!changed) return r;
+    return {
+      ...r,
+      path,
+      plan_length_ft: planLengthFt(path, ftPerPx),
+    };
+  });
 }
 
 /** Prim's MST; returns undirected edges as index pairs into points. */

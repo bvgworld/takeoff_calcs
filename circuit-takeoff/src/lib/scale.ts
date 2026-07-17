@@ -1,23 +1,69 @@
 /**
  * Scale helpers: parse real-world distances, format badges / measures.
- * Raster assumed ~150 DPI for architectural-scale approximation.
+ * Raster assumed ~150 DPI for architectural-scale approximation when
+ * nearestArchScale has no stored render_dpi.
  */
 
 const ASSUMED_DPI = 150;
 
-const ARCH_SCALES: { label: string; inchPerFt: number }[] = [
-  { label: '1/16" = 1\'-0"', inchPerFt: 1 / 16 },
-  { label: '3/32" = 1\'-0"', inchPerFt: 3 / 32 },
-  { label: '1/8" = 1\'-0"', inchPerFt: 1 / 8 },
-  { label: '3/16" = 1\'-0"', inchPerFt: 3 / 16 },
-  { label: '1/4" = 1\'-0"', inchPerFt: 1 / 4 },
-  { label: '3/8" = 1\'-0"', inchPerFt: 3 / 8 },
-  { label: '1/2" = 1\'-0"', inchPerFt: 1 / 2 },
-  { label: '3/4" = 1\'-0"', inchPerFt: 3 / 4 },
-  { label: '1" = 1\'-0"', inchPerFt: 1 },
-  { label: '1-1/2" = 1\'-0"', inchPerFt: 1.5 },
-  { label: '3" = 1\'-0"', inchPerFt: 3 },
+/** Paper inches per real foot (architectural). */
+export type ArchScalePreset = {
+  kind: "arch";
+  label: string;
+  inchPerFt: number;
+};
+
+/** Engineering: 1" on paper = N feet. */
+export type EngScalePreset = {
+  kind: "eng";
+  label: string;
+  feetPerPaperInch: number;
+};
+
+export type ScalePreset = ArchScalePreset | EngScalePreset;
+
+export const ARCH_SCALE_PRESETS: ArchScalePreset[] = [
+  { kind: "arch", label: '1/16" = 1\'-0"', inchPerFt: 1 / 16 },
+  { kind: "arch", label: '3/32" = 1\'-0"', inchPerFt: 3 / 32 },
+  { kind: "arch", label: '1/8" = 1\'-0"', inchPerFt: 1 / 8 },
+  { kind: "arch", label: '3/16" = 1\'-0"', inchPerFt: 3 / 16 },
+  { kind: "arch", label: '1/4" = 1\'-0"', inchPerFt: 1 / 4 },
+  { kind: "arch", label: '3/8" = 1\'-0"', inchPerFt: 3 / 8 },
+  { kind: "arch", label: '1/2" = 1\'-0"', inchPerFt: 1 / 2 },
+  { kind: "arch", label: '3/4" = 1\'-0"', inchPerFt: 3 / 4 },
+  { kind: "arch", label: '1" = 1\'-0"', inchPerFt: 1 },
 ];
+
+export const ENG_SCALE_PRESETS: EngScalePreset[] = [
+  { kind: "eng", label: '1" = 10\'', feetPerPaperInch: 10 },
+  { kind: "eng", label: '1" = 20\'', feetPerPaperInch: 20 },
+  { kind: "eng", label: '1" = 30\'', feetPerPaperInch: 30 },
+  { kind: "eng", label: '1" = 40\'', feetPerPaperInch: 40 },
+  { kind: "eng", label: '1" = 50\'', feetPerPaperInch: 50 },
+  { kind: "eng", label: '1" = 60\'', feetPerPaperInch: 60 },
+];
+
+const ARCH_SCALES = ARCH_SCALE_PRESETS;
+
+/** Feet of real world per inch of paper for a preset. */
+export function feetPerPaperInch(preset: ScalePreset): number {
+  if (preset.kind === "eng") return preset.feetPerPaperInch;
+  return 1 / preset.inchPerFt;
+}
+
+/**
+ * ft_per_px from a drawing-scale preset and the sheet's actual render DPI.
+ * Example: 1/8"=1'-0" → 8 ft/paper-inch; at 150 DPI → 8/150 ≈ 0.05333.
+ */
+export function ftPerPxFromPreset(
+  preset: ScalePreset,
+  renderDpi: number
+): number {
+  if (!(renderDpi > 0)) {
+    throw new Error("renderDpi must be positive");
+  }
+  return feetPerPaperInch(preset) / renderDpi;
+}
 
 /** Parse 25', 25.5, 25'-6", 25' 6", 25 ft 6 in, etc. → feet. */
 export function parseDistanceFt(input: string): number | null {
