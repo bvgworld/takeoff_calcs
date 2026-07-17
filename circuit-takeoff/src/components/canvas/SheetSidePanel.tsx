@@ -47,6 +47,7 @@ type Props = {
   onRouteData: () => void;
   editRoutes: boolean;
   onToggleEditRoutes: () => void;
+  circuitBusy?: boolean;
   checkDetail: CodeCheck | null;
   onCheckClick: (check: CodeCheck | null) => void;
 };
@@ -130,6 +131,7 @@ function CircuitsTab({
   editRoutes,
   onToggleEditRoutes,
   onCheckClick,
+  circuitBusy = false,
 }: Props) {
   const panels = devices.filter((d) => d.type === "panel");
   const [panelId, setPanelId] = useState("");
@@ -198,7 +200,7 @@ function CircuitsTab({
         <Button
           type="button"
           className="w-full"
-          disabled={!activePanel}
+          disabled={!activePanel || circuitBusy}
           onClick={() =>
             onNewCircuit({
               panelId: activePanel,
@@ -210,7 +212,7 @@ function CircuitsTab({
             })
           }
         >
-          New circuit
+          {circuitBusy ? "Creating…" : "New circuit"}
         </Button>
       </section>
 

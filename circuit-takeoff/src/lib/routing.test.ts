@@ -3,6 +3,7 @@ import {
   applyLengthAdders,
   glueRoutesToMovedDevice,
   manhattan,
+  moveOrthogonalSegment,
   moveRouteEndpoint,
   orthogonalPolyline,
   planLengthFt,
@@ -175,5 +176,36 @@ describe("route endpoint gluing", () => {
     expect(out[0].path[0]).toEqual({ x: 0, y: 0 });
     expect(out[0].path[out[0].path.length - 1]).toEqual({ x: 60, y: 55 });
     expect(out[0].plan_length_ft).toBe(planLengthFt(out[0].path, 1));
+  });
+});
+
+describe("moveOrthogonalSegment", () => {
+  it("moves a middle horizontal segment vertically; neighbors stay orthogonal", () => {
+    const path = [
+      { x: 0, y: 0 },
+      { x: 0, y: 10 },
+      { x: 20, y: 10 },
+      { x: 20, y: 0 },
+    ];
+    const next = moveOrthogonalSegment(path, 1, { x: 10, y: 15 });
+    expect(next[0]).toEqual({ x: 0, y: 0 });
+    expect(next[next.length - 1]).toEqual({ x: 20, y: 0 });
+    // Moved segment at y=15
+    expect(next.some((p) => p.y === 15 && p.x === 0)).toBe(true);
+    expect(next.some((p) => p.y === 15 && p.x === 20)).toBe(true);
+  });
+
+  it("inserts a bend when dragging a segment adjacent to a locked start", () => {
+    const path = [
+      { x: 0, y: 0 },
+      { x: 30, y: 0 },
+      { x: 30, y: 20 },
+    ];
+    const next = moveOrthogonalSegment(path, 0, { x: 15, y: 8 });
+    expect(next[0]).toEqual({ x: 0, y: 0 }); // locked
+    expect(next[next.length - 1]).toEqual({ x: 30, y: 20 });
+    expect(next.length).toBeGreaterThanOrEqual(3);
+    // Has horizontal run at y=8
+    expect(next.some((p, i) => i > 0 && p.y === 8)).toBe(true);
   });
 });

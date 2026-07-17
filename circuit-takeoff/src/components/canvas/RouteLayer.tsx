@@ -2,7 +2,12 @@
 
 import { Group, Line, Circle, Arrow } from "react-konva";
 import type { Circuit, Point, Route } from "@/lib/types";
-import { circuitHue, planLengthFt, snapOrthogonalBend } from "@/lib/routing";
+import {
+  circuitHue,
+  moveOrthogonalSegment,
+  planLengthFt,
+  snapOrthogonalBend,
+} from "@/lib/routing";
 import { LV_COLORS, LV_DASH, dimmingFollows } from "@/lib/lv-routing";
 import type { Device } from "@/lib/types";
 import { pointerInParentLocal } from "@/lib/konva-coords";
@@ -13,7 +18,8 @@ type Props = {
   routes: Route[];
   ftPerPx: number;
   selectedRouteId: string | null;
-  editMode: boolean;
+  /** Show/edit handles when a route is selected (Select or Edit routes). */
+  editEnabled: boolean;
   onSelectRoute: (id: string) => void;
   onPathChange: (
     routeId: string,
@@ -29,7 +35,7 @@ export function RouteLayer({
   routes,
   ftPerPx,
   selectedRouteId,
-  editMode,
+  editEnabled,
   onSelectRoute,
   onPathChange,
 }: Props) {
@@ -54,6 +60,7 @@ export function RouteLayer({
           : r.kind === "switchleg"
             ? [8, 5]
             : undefined;
+        const showHandles = selected && editEnabled;
 
         return (
           <Group key={r.id}>
@@ -70,16 +77,129 @@ export function RouteLayer({
                 onSelectRoute(r.id);
               }}
             />
+
+            {/* Per-segment hit targets for whole-segment drag */}
+            {showHandles &&
+              r.path.slice(0, -1).map((a, i) => {
+                const b = r.path[i + 1];
+                const horiz = Math.abs(a.y - b.y) <= 0.75;
+                return (
+                  <Line
+                    key={`${r.id}-seg-${i}`}
+                    points={[a.x, a.y, b.x, b.y]}
+                    stroke="transparent"
+                    strokeWidth={14}
+                    hitStrokeWidth={16}
+                    lineCap="round"
+                    onMouseEnter={(e) => {
+                      const stage = e.target.getStage();
+                      if (stage) {
+                        stage.container().style.cursor = horiz
+                          ? "ns-resize"
+                          : "ew-resize";
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      const stage = e.target.getStage();
+                      if (stage) stage.container().style.cursor = "";
+                    }}
+                    onClick={(e) => {
+                      e.cancelBubble = true;
+                      onSelectRoute(r.id);
+                    }}
+                    draggable
+                    // Path rewrite drives geometry; keep this hit-line parked at origin.
+                    dragBoundFunc={() => ({ x: 0, y: 0 })}
+                    onDragStart={(e) => {
+                      e.cancelBubble = true;
+                      const stage = e.target.getStage();
+                      if (stage) {
+                        e.target.setAttr("_stageWasDraggable", stage.draggable());
+                        stage.draggable(false);
+                      }
+                      e.target.setAttr("_segIndex", i);
+                      e.target.setAttr(
+                        "_path0",
+                        r.path.map((p) => ({ ...p }))
+                      );
+                    }}
+                    onDragMove={(e) => {
+                      e.cancelBubble = true;
+                      e.target.position({ x: 0, y: 0 });
+                      const local = pointerInParentLocal(e.target);
+                      if (!local) return;
+                      const segIndex = e.target.getAttr("_segIndex") as number;
+                      const base =
+                        (e.target.getAttr("_path0") as Point[]) || r.path;
+                      // Always from drag-start path so segIndex stays valid.
+                      const next = moveOrthogonalSegment(base, segIndex, local, {
+                        lockStart: true,
+                        lockEnd: true,
+                      });
+                      onPathChange(
+                        r.id,
+                        next,
+                        planLengthFt(next, ftPerPx),
+                        true
+                      );
+                    }}
+                    onDragEnd={(e) => {
+                      e.cancelBubble = true;
+                      e.target.position({ x: 0, y: 0 });
+                      const stage = e.target.getStage();
+                      if (stage) {
+                        const was = e.target.getAttr("_stageWasDraggable");
+                        stage.draggable(was === true);
+                        stage.container().style.cursor = "";
+                      }
+                      const local = pointerInParentLocal(e.target);
+                      const segIndex = e.target.getAttr("_segIndex") as number;
+                      const base =
+                        (e.target.getAttr("_path0") as Point[]) || r.path;
+                      if (local) {
+                        const next = moveOrthogonalSegment(
+                          base,
+                          segIndex,
+                          local,
+                          { lockStart: true, lockEnd: true }
+                        );
+                        onPathChange(
+                          r.id,
+                          next,
+                          planLengthFt(next, ftPerPx),
+                          true
+                        );
+                      }
+                    }}
+                  />
+                );
+              })}
+
             {r.kind === "homerun" && r.path.length >= 2 && !lv && (
               <HomeRunDecor path={r.path} color={hue} />
             )}
-            {editMode &&
-              selected &&
+
+            {showHandles &&
               r.path.map((p, i) => {
-                if (i === 0 || i === r.path.length - 1) return null;
+                const isEnd = i === 0 || i === r.path.length - 1;
+                if (isEnd) {
+                  // Locked endpoint — visible, not draggable
+                  return (
+                    <Circle
+                      key={`${r.id}-end-${i}`}
+                      x={p.x}
+                      y={p.y}
+                      radius={5}
+                      fill="#94a3b8"
+                      stroke={hue}
+                      strokeWidth={2}
+                      listening={false}
+                    />
+                  );
+                }
                 return (
                   <Circle
-                    key={`${r.id}-${i}`}
+                    key={`${r.id}-bend-${i}`}
                     x={p.x}
                     y={p.y}
                     radius={6}
@@ -87,7 +207,19 @@ export function RouteLayer({
                     stroke={hue}
                     strokeWidth={2}
                     draggable
+                    onDragStart={(e) => {
+                      e.cancelBubble = true;
+                      const stage = e.target.getStage();
+                      if (stage) {
+                        e.target.setAttr(
+                          "_stageWasDraggable",
+                          stage.draggable()
+                        );
+                        stage.draggable(false);
+                      }
+                    }}
                     onDragMove={(e) => {
+                      e.cancelBubble = true;
                       const local = pointerInParentLocal(e.target);
                       if (local) e.target.position(local);
                       const next = snapOrthogonalBend(
@@ -101,6 +233,12 @@ export function RouteLayer({
                       onPathChange(r.id, next, ft, true);
                     }}
                     onDragEnd={(e) => {
+                      e.cancelBubble = true;
+                      const stage = e.target.getStage();
+                      if (stage) {
+                        const was = e.target.getAttr("_stageWasDraggable");
+                        stage.draggable(was === true);
+                      }
                       const local = pointerInParentLocal(e.target);
                       if (local) e.target.position(local);
                       const next = snapOrthogonalBend(
@@ -119,7 +257,6 @@ export function RouteLayer({
         );
       })}
 
-      {/* Dimming follow overlay — distinct dash on existing branch/switchleg */}
       {dimming.flatMap((f) =>
         f.paths.map((seg, i) => {
           if (seg.path.length < 2) return null;
@@ -142,11 +279,9 @@ export function RouteLayer({
   );
 }
 
-/** Arrowhead at entry end + hash marks near panel (start). */
 function HomeRunDecor({ path, color }: { path: Point[]; color: string }) {
   if (path.length < 2) return null;
   const start = path[0];
-  const end = path[path.length - 1];
   const second = path[1];
 
   const marks = 3;
@@ -172,6 +307,7 @@ function HomeRunDecor({ path, color }: { path: Point[]; color: string }) {
   }
 
   const prev = path[path.length - 2];
+  const end = path[path.length - 1];
   return (
     <Group listening={false}>
       {hashes}

@@ -58,6 +58,7 @@ import {
   type SheetRotation,
 } from "@/lib/rotation";
 import { autoGroupDevices } from "@/lib/auto-group";
+import { insertCircuitWithRetry } from "@/lib/circuits";
 import { buildProjectTakeoff, summarizeTakeoff } from "@/lib/takeoff";
 import type {
   Circuit,
@@ -173,6 +174,7 @@ export function SheetViewer({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [selectedRouteId, setSelectedRouteId] = useState<string | null>(null);
   const [editRoutes, setEditRoutes] = useState(false);
+  const [circuitBusy, setCircuitBusy] = useState(false);
   const [checkDetail, setCheckDetail] = useState<CodeCheck | null>(null);
   const [lasso, setLasso] = useState<{
     start: Point;
@@ -1102,6 +1104,8 @@ export function SheetViewer({
                     moveBeforeRef.current = devicesRef.current
                       .filter((dev) => moveIds.includes(dev.id))
                       .map((dev) => ({ id: dev.id, x: dev.x, y: dev.y }));
+                    const stage = stageRef.current;
+                    if (stage) stage.draggable(false);
                   }}
                   onDragMove={(x, y, dx, dy) => {
                     const moveIds = selectedIds.includes(d.id)
@@ -1162,6 +1166,8 @@ export function SheetViewer({
                     }
                   }}
                   onDragEnd={(x, y) => {
+                    const stage = stageRef.current;
+                    if (stage) stage.draggable(tool === "pan");
                     schedulePosPersist(d.id, x, y);
                     setDevices((prev) =>
                       prev.map((dev) =>
@@ -1193,7 +1199,7 @@ export function SheetViewer({
                   routes={routes}
                   ftPerPx={ftPerPx}
                   selectedRouteId={selectedRouteId}
-                  editMode={editRoutes}
+                  editEnabled={tool === "select" || editRoutes}
                   onSelectRoute={setSelectedRouteId}
                   onPathChange={(routeId, path, planFt, userEdited) => {
                     setRoutes((prev) =>
@@ -1342,31 +1348,46 @@ export function SheetViewer({
         checkDetail={checkDetail}
         onCheckClick={setCheckDetail}
         onNewCircuit={async (opts) => {
-          const run = async () => {
-            const { panelId, ctype, voltage } = opts;
-            const supabase = createClient();
-            const nextNum =
-              circuits.reduce((m, c) => Math.max(m, c.number), 0) + 1;
-            const { data, error } = await supabase
-              .from("circuits")
-              .insert({
-                sheet_id: sheetId,
-                panel_device_id: panelId,
-                number: nextNum,
-                ctype,
-                voltage,
-                breaker_amps: 20,
-              })
-              .select("*")
-              .single();
-            if (error) {
-              showError(error.message, () => void run());
-              return;
-            }
-            setCircuits((prev) => [...prev, data as Circuit]);
+          if (circuitBusy) return;
+          setCircuitBusy(true);
+          const { panelId, ctype, voltage } = opts;
+          const nextNum =
+            circuits.reduce((m, c) => Math.max(m, c.number), 0) + 1;
+          const tempId = `temp-${crypto.randomUUID()}`;
+          const optimistic: Circuit = {
+            id: tempId,
+            sheet_id: sheetId,
+            panel_device_id: panelId,
+            number: nextNum,
+            ctype,
+            voltage,
+            breaker_amps: 20,
+            created_at: new Date().toISOString(),
           };
-          await run();
+          setCircuits((prev) => [...prev, optimistic]);
+          try {
+            const supabase = createClient();
+            const data = await insertCircuitWithRetry(supabase, {
+              sheet_id: sheetId,
+              panel_device_id: panelId,
+              number: nextNum,
+              ctype,
+              voltage,
+              breaker_amps: 20,
+            });
+            setCircuits((prev) =>
+              prev.map((c) => (c.id === tempId ? data : c))
+            );
+          } catch (err) {
+            setCircuits((prev) => prev.filter((c) => c.id !== tempId));
+            showError(
+              err instanceof Error ? err.message : "Failed to create circuit"
+            );
+          } finally {
+            setCircuitBusy(false);
+          }
         }}
+        circuitBusy={circuitBusy}
         onAssignSelected={async (circuitId) => {
           const ids = selectedIds.filter((id) => {
             const d = devices.find((x) => x.id === id);
@@ -1407,35 +1428,34 @@ export function SheetViewer({
               ctype === "lighting"
                 ? settings.lighting_voltage
                 : settings.receptacle_voltage;
-            const { data, error } = await supabase
-              .from("circuits")
-              .insert({
+            try {
+              const ckt = await insertCircuitWithRetry(supabase, {
                 sheet_id: sheetId,
                 panel_device_id: panelId,
-                number: nextNum++,
+                number: nextNum,
                 ctype,
                 voltage,
                 breaker_amps: 20,
-              })
-              .select("*")
-              .single();
-            if (error) {
-              showError(error.message);
+              });
+              nextNum = ckt.number + 1;
+              created.push(ckt);
+              await supabase
+                .from("devices")
+                .update({ circuit_id: ckt.id })
+                .in("id", cluster.deviceIds);
+              setDevices((prev) =>
+                prev.map((d) =>
+                  cluster.deviceIds.includes(d.id)
+                    ? { ...d, circuit_id: ckt.id }
+                    : d
+                )
+              );
+            } catch (err) {
+              showError(
+                err instanceof Error ? err.message : "Auto-group failed"
+              );
               break;
             }
-            const ckt = data as Circuit;
-            created.push(ckt);
-            await supabase
-              .from("devices")
-              .update({ circuit_id: ckt.id })
-              .in("id", cluster.deviceIds);
-            setDevices((prev) =>
-              prev.map((d) =>
-                cluster.deviceIds.includes(d.id)
-                  ? { ...d, circuit_id: ckt.id }
-                  : d
-              )
-            );
           }
           setCircuits((prev) => [...prev, ...created]);
         }}

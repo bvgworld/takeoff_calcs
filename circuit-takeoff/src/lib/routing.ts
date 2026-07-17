@@ -302,6 +302,139 @@ export function snapOrthogonalBend(
   return next;
 }
 
+const ORTH_EPS = 0.75;
+
+function isHorizontal(a: Point, b: Point): boolean {
+  return Math.abs(a.y - b.y) <= ORTH_EPS;
+}
+
+function isVertical(a: Point, b: Point): boolean {
+  return Math.abs(a.x - b.x) <= ORTH_EPS;
+}
+
+/**
+ * Move the segment between path[segIndex] and path[segIndex+1] perpendicular
+ * to its orientation. Locked endpoints (index 0 / last) are never moved —
+ * a new bend is inserted on that side instead.
+ */
+export function moveOrthogonalSegment(
+  path: Point[],
+  segIndex: number,
+  pointer: Point,
+  opts?: { lockStart?: boolean; lockEnd?: boolean }
+): Point[] {
+  if (segIndex < 0 || segIndex >= path.length - 1) return path;
+  const lockStart = opts?.lockStart ?? true;
+  const lockEnd = opts?.lockEnd ?? true;
+  const a0 = path[segIndex];
+  const b0 = path[segIndex + 1];
+  const last = path.length - 1;
+  const aLocked = lockStart && segIndex === 0;
+  const bLocked = lockEnd && segIndex + 1 === last;
+
+  if (isHorizontal(a0, b0)) {
+    return rebuildHorizMove(path, segIndex, pointer.y, aLocked, bLocked);
+  }
+  if (isVertical(a0, b0)) {
+    return rebuildVertMove(path, segIndex, pointer.x, aLocked, bLocked);
+  }
+  // Non-orthogonal — force to nearest axis from pointer
+  if (Math.abs(pointer.x - a0.x) < Math.abs(pointer.y - a0.y)) {
+    return rebuildVertMove(path, segIndex, pointer.x, aLocked, bLocked);
+  }
+  return rebuildHorizMove(path, segIndex, pointer.y, aLocked, bLocked);
+}
+
+function rebuildHorizMove(
+  path: Point[],
+  segIndex: number,
+  newY: number,
+  aLocked: boolean,
+  bLocked: boolean
+): Point[] {
+  const a0 = path[segIndex];
+  const b0 = path[segIndex + 1];
+  const before = path.slice(0, segIndex).map((p) => ({ ...p }));
+  const after = path.slice(segIndex + 2).map((p) => ({ ...p }));
+  const mid: Point[] = [];
+
+  if (aLocked) {
+    mid.push({ ...a0 });
+    mid.push({ x: a0.x, y: newY });
+  } else {
+    mid.push({ x: a0.x, y: newY });
+  }
+
+  if (bLocked) {
+    mid.push({ x: b0.x, y: newY });
+    mid.push({ ...b0 });
+  } else {
+    mid.push({ x: b0.x, y: newY });
+  }
+
+  return dedupeCollinear([...before, ...mid, ...after]);
+}
+
+function rebuildVertMove(
+  path: Point[],
+  segIndex: number,
+  newX: number,
+  aLocked: boolean,
+  bLocked: boolean
+): Point[] {
+  const a0 = path[segIndex];
+  const b0 = path[segIndex + 1];
+  const before = path.slice(0, segIndex).map((p) => ({ ...p }));
+  const after = path.slice(segIndex + 2).map((p) => ({ ...p }));
+  const mid: Point[] = [];
+
+  if (aLocked) {
+    mid.push({ ...a0 });
+    mid.push({ x: newX, y: a0.y });
+  } else {
+    mid.push({ x: newX, y: a0.y });
+  }
+
+  if (bLocked) {
+    mid.push({ x: newX, y: b0.y });
+    mid.push({ ...b0 });
+  } else {
+    mid.push({ x: newX, y: b0.y });
+  }
+
+  return dedupeCollinear([...before, ...mid, ...after]);
+}
+
+/** Drop consecutive duplicates and obvious no-op points. */
+function dedupeCollinear(path: Point[]): Point[] {
+  if (path.length <= 2) return path;
+  const out: Point[] = [{ ...path[0] }];
+  for (let i = 1; i < path.length; i++) {
+    const prev = out[out.length - 1];
+    const cur = path[i];
+    if (Math.hypot(cur.x - prev.x, cur.y - prev.y) < 0.5) continue;
+    out.push({ ...cur });
+  }
+  // Remove middle points that lie on a straight orthog line
+  let changed = true;
+  while (changed && out.length > 2) {
+    changed = false;
+    for (let i = 1; i < out.length - 1; i++) {
+      const a = out[i - 1];
+      const b = out[i];
+      const c = out[i + 1];
+      const colH = isHorizontal(a, b) && isHorizontal(b, c);
+      const colV = isVertical(a, b) && isVertical(b, c);
+      if (colH || colV) {
+        out.splice(i, 1);
+        changed = true;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
 export const CIRCUIT_HUES = [
   "#2C64F2",
   "#1D7A46",

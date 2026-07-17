@@ -19,6 +19,192 @@ type Props = {
   onDragEnd: (x: number, y: number) => void;
 };
 
+/** Constant-screen-size symbol body (panel / switch / etc.) in screen px. */
+function ConstantSizeBody({
+  category,
+  symbol,
+  label,
+  selected,
+}: {
+  category: string;
+  symbol: string;
+  label: string;
+  selected: boolean;
+}) {
+  const r12 = 6;
+  const rSel = 7;
+  const panelHalf = 8;
+  const panelSel = 10;
+  const stroke = 1.5;
+  const selStroke = 2;
+
+  if (category === "panel") {
+    return (
+      <>
+        {selected && (
+          <Rect
+            x={-panelSel}
+            y={-panelSel}
+            width={panelSel * 2}
+            height={panelSel * 2}
+            stroke="#A01825"
+            strokeWidth={selStroke}
+            cornerRadius={3}
+          />
+        )}
+        <Rect
+          x={-panelHalf}
+          y={-panelHalf}
+          width={panelHalf * 2}
+          height={panelHalf * 2}
+          fill="#141E2C"
+          cornerRadius={3}
+        />
+        <Text
+          text={label.slice(0, 6) || "LP"}
+          x={-panelHalf}
+          y={-4}
+          width={panelHalf * 2}
+          align="center"
+          fontSize={9}
+          fontStyle="bold"
+          fill="#F6F7FC"
+          listening={false}
+        />
+      </>
+    );
+  }
+
+  if (symbol === "circle") {
+    return (
+      <>
+        {selected && (
+          <Circle radius={rSel} stroke="#A01825" strokeWidth={selStroke} />
+        )}
+        <Circle
+          radius={r12}
+          fill={category === "fire" ? "#F9E9EB" : "#EAF0FE"}
+          stroke={category === "fire" ? "#A01825" : "#1D7A46"}
+          strokeWidth={stroke}
+        />
+        {category === "receptacle" && (
+          <>
+            <Line
+              points={[-r12 * 0.55, -r12 * 0.35, r12 * 0.55, -r12 * 0.35]}
+              stroke="#1D7A46"
+              strokeWidth={stroke}
+              listening={false}
+            />
+            <Line
+              points={[-r12 * 0.55, r12 * 0.35, r12 * 0.55, r12 * 0.35]}
+              stroke="#1D7A46"
+              strokeWidth={stroke}
+              listening={false}
+            />
+          </>
+        )}
+      </>
+    );
+  }
+
+  if (symbol === "square" || symbol === "rect") {
+    return (
+      <>
+        {selected && (
+          <Rect
+            x={-rSel}
+            y={-rSel}
+            width={rSel * 2}
+            height={rSel * 2}
+            stroke="#A01825"
+            strokeWidth={selStroke}
+            cornerRadius={2}
+          />
+        )}
+        <Rect
+          x={-r12}
+          y={-r12}
+          width={r12 * 2}
+          height={r12 * 2}
+          fill={
+            category === "switch"
+              ? "#FBF3DC"
+              : category === "headend"
+                ? "#141E2C"
+                : "#EAF0FE"
+          }
+          stroke={
+            category === "switch"
+              ? "#9A6A00"
+              : category === "headend"
+                ? "#2C64F2"
+                : "#141E2C"
+          }
+          strokeWidth={stroke}
+          cornerRadius={2}
+        />
+        <Text
+          text={label.slice(0, 4)}
+          x={-r12}
+          y={-5}
+          width={r12 * 2}
+          align="center"
+          fontSize={9}
+          fontStyle="bold"
+          fill={category === "headend" ? "#F6F7FC" : "#141E2C"}
+          listening={false}
+        />
+      </>
+    );
+  }
+
+  if (symbol === "triangle") {
+    return (
+      <>
+        {selected && (
+          <RegularPolygon
+            sides={3}
+            radius={rSel}
+            stroke="#A01825"
+            strokeWidth={selStroke}
+          />
+        )}
+        <RegularPolygon
+          sides={3}
+          radius={r12}
+          fill="#F9E9EB"
+          stroke="#A01825"
+          strokeWidth={stroke}
+        />
+      </>
+    );
+  }
+
+  if (symbol === "hex") {
+    return (
+      <>
+        {selected && (
+          <RegularPolygon
+            sides={6}
+            radius={rSel}
+            stroke="#A01825"
+            strokeWidth={selStroke}
+          />
+        )}
+        <RegularPolygon
+          sides={6}
+          radius={r12}
+          fill="#EAF0FE"
+          stroke="#2C64F2"
+          strokeWidth={stroke}
+        />
+      </>
+    );
+  }
+
+  return null;
+}
+
 function DeviceShapeInner({
   device,
   selected,
@@ -34,17 +220,13 @@ function DeviceShapeInner({
   const entry = getCatalogEntry(catalogId);
   const label = device.attrs.label || entry?.label.slice(0, 4) || "?";
   const s = viewScale > 0 ? viewScale : 1;
-  const u = 1 / s;
-  const r12 = 6 * u;
-  const rSel = 7 * u;
-  const panelHalf = 8 * u;
-  const panelSel = 10 * u;
-  const stroke = 1.5 * u;
-  const selStroke = 2 * u;
+  const inv = 1 / s;
   const symbol = entry?.symbol ?? "circle";
   const category = entry?.category ?? device.type;
+  const isFixture = category === "fixture";
 
   return (
+    // Outer group: image-space position only — this node is draggable.
     <Group
       x={device.x}
       y={device.y}
@@ -60,6 +242,12 @@ function DeviceShapeInner({
         onSelect(false);
       }}
       onDragStart={(e) => {
+        e.cancelBubble = true;
+        const stage = e.target.getStage();
+        if (stage) {
+          e.target.setAttr("_stageWasDraggable", stage.draggable());
+          stage.draggable(false);
+        }
         const local = pointerInParentLocal(e.target);
         if (local) e.target.position(local);
         e.target.setAttr("_ox", e.target.x());
@@ -67,6 +255,7 @@ function DeviceShapeInner({
         onDragStart?.();
       }}
       onDragMove={(e) => {
+        e.cancelBubble = true;
         const local = pointerInParentLocal(e.target);
         if (local) e.target.position(local);
         const ox = e.target.getAttr("_ox") as number;
@@ -78,47 +267,18 @@ function DeviceShapeInner({
         e.target.setAttr("_oy", y);
       }}
       onDragEnd={(e) => {
+        e.cancelBubble = true;
+        const stage = e.target.getStage();
+        if (stage) {
+          const was = e.target.getAttr("_stageWasDraggable");
+          stage.draggable(was === true);
+        }
         const local = pointerInParentLocal(e.target);
         if (local) e.target.position(local);
         onDragEnd(e.target.x(), e.target.y());
       }}
     >
-      {category === "panel" && (
-        <>
-          {selected && (
-            <Rect
-              x={-panelSel}
-              y={-panelSel}
-              width={panelSel * 2}
-              height={panelSel * 2}
-              stroke="#A01825"
-              strokeWidth={selStroke}
-              cornerRadius={3 * u}
-            />
-          )}
-          <Rect
-            x={-panelHalf}
-            y={-panelHalf}
-            width={panelHalf * 2}
-            height={panelHalf * 2}
-            fill="#141E2C"
-            cornerRadius={3 * u}
-          />
-          <Text
-            text={label.slice(0, 6) || "LP"}
-            x={-panelHalf}
-            y={-4 * u}
-            width={panelHalf * 2}
-            align="center"
-            fontSize={9 * u}
-            fontStyle="bold"
-            fill="#F6F7FC"
-            listening={false}
-          />
-        </>
-      )}
-
-      {category === "fixture" &&
+      {isFixture ? (
         (() => {
           const { w, h } = fixtureSizePx(ftPerPx, catalogId);
           return (
@@ -157,134 +317,18 @@ function DeviceShapeInner({
               />
             </>
           );
-        })()}
-
-      {category !== "panel" &&
-        category !== "fixture" &&
-        symbol === "circle" && (
-          <>
-            {selected && (
-              <Circle radius={rSel} stroke="#A01825" strokeWidth={selStroke} />
-            )}
-            <Circle
-              radius={r12}
-              fill={category === "fire" ? "#F9E9EB" : "#EAF0FE"}
-              stroke={category === "fire" ? "#A01825" : "#1D7A46"}
-              strokeWidth={stroke}
-            />
-            {category === "receptacle" && (
-              <>
-                <Line
-                  points={[-r12 * 0.55, -r12 * 0.35, r12 * 0.55, -r12 * 0.35]}
-                  stroke="#1D7A46"
-                  strokeWidth={stroke}
-                  listening={false}
-                />
-                <Line
-                  points={[-r12 * 0.55, r12 * 0.35, r12 * 0.55, r12 * 0.35]}
-                  stroke="#1D7A46"
-                  strokeWidth={stroke}
-                  listening={false}
-                />
-              </>
-            )}
-          </>
-        )}
-
-      {category !== "panel" &&
-        category !== "fixture" &&
-        (symbol === "square" || symbol === "rect") && (
-          <>
-            {selected && (
-              <Rect
-                x={-rSel}
-                y={-rSel}
-                width={rSel * 2}
-                height={rSel * 2}
-                stroke="#A01825"
-                strokeWidth={selStroke}
-                cornerRadius={2 * u}
-              />
-            )}
-            <Rect
-              x={-r12}
-              y={-r12}
-              width={r12 * 2}
-              height={r12 * 2}
-              fill={
-                category === "switch"
-                  ? "#FBF3DC"
-                  : category === "headend"
-                    ? "#141E2C"
-                    : "#EAF0FE"
-              }
-              stroke={
-                category === "switch"
-                  ? "#9A6A00"
-                  : category === "headend"
-                    ? "#2C64F2"
-                    : "#141E2C"
-              }
-              strokeWidth={stroke}
-              cornerRadius={2 * u}
-            />
-            <Text
-              text={label.slice(0, 4)}
-              x={-r12}
-              y={-5 * u}
-              width={r12 * 2}
-              align="center"
-              fontSize={9 * u}
-              fontStyle="bold"
-              fill={category === "headend" ? "#F6F7FC" : "#141E2C"}
-              listening={false}
-            />
-          </>
-        )}
-
-      {category !== "panel" &&
-        category !== "fixture" &&
-        symbol === "triangle" && (
-          <>
-            {selected && (
-              <RegularPolygon
-                sides={3}
-                radius={rSel}
-                stroke="#A01825"
-                strokeWidth={selStroke}
-              />
-            )}
-            <RegularPolygon
-              sides={3}
-              radius={r12}
-              fill="#F9E9EB"
-              stroke="#A01825"
-              strokeWidth={stroke}
-            />
-          </>
-        )}
-
-      {category !== "panel" &&
-        category !== "fixture" &&
-        symbol === "hex" && (
-          <>
-            {selected && (
-              <RegularPolygon
-                sides={6}
-                radius={rSel}
-                stroke="#A01825"
-                strokeWidth={selStroke}
-              />
-            )}
-            <RegularPolygon
-              sides={6}
-              radius={r12}
-              fill="#EAF0FE"
-              stroke="#2C64F2"
-              strokeWidth={stroke}
-            />
-          </>
-        )}
+        })()
+      ) : (
+        // Inner inverse-scale: constant screen size; NOT draggable.
+        <Group scaleX={inv} scaleY={inv} perfectDrawEnabled={false}>
+          <ConstantSizeBody
+            category={category}
+            symbol={symbol}
+            label={label}
+            selected={selected}
+          />
+        </Group>
+      )}
     </Group>
   );
 }
