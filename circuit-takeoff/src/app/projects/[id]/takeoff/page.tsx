@@ -48,7 +48,10 @@ export default async function TakeoffPage({
   if (!project) notFound();
 
   const p = project as Project;
-  const settings = (p.settings as ProjectSettings) || DEFAULT_SETTINGS;
+  const settings = {
+    ...DEFAULT_SETTINGS,
+    ...((p.settings as ProjectSettings) || {}),
+  };
 
   const { data: sheets } = await supabase
     .from("sheets")
@@ -84,13 +87,20 @@ export default async function TakeoffPage({
     devices = (devData as Device[]) || [];
 
     const cktIds = circuits.map((c) => c.id);
-    if (cktIds.length) {
-      const { data: routeData } = await supabase
-        .from("routes")
-        .select("*")
-        .in("circuit_id", cktIds);
-      routes = (routeData as Route[]) || [];
+    const powerRoutes =
+      cktIds.length > 0
+        ? (
+            await supabase.from("routes").select("*").in("circuit_id", cktIds)
+          ).data
+        : [];
+    const lvRoutes = (
+      await supabase.from("routes").select("*").in("sheet_id", sheetIds)
+    ).data;
+    const byId = new Map<string, Route>();
+    for (const r of [...((powerRoutes as Route[]) || []), ...((lvRoutes as Route[]) || [])]) {
+      byId.set(r.id, r);
     }
+    routes = Array.from(byId.values());
   }
 
   const { lines, totals } = buildProjectTakeoff({
@@ -110,6 +120,7 @@ export default async function TakeoffPage({
 
   const csvRows = [...lines, ...totals];
   const safeName = p.name.replace(/[^\w.-]+/g, "_").slice(0, 48);
+  const hasContent = lines.length > 0;
 
   return (
     <div className="min-h-screen bg-perry-white">
@@ -138,14 +149,15 @@ export default async function TakeoffPage({
           />
         </div>
 
-        {!circuits.length ? (
+        {!hasContent ? (
           <div className="mt-10 rounded-lg border border-dashed border-perry-silver bg-white px-6 py-12 text-center">
             <p className="font-display text-lg text-perry-industrial">
               No takeoff yet
             </p>
             <p className="mt-2 text-sm text-gray-500">
               Open a sheet, calibrate, stamp devices, create a circuit, then
-              Route. Quantities will show up here automatically.
+              Route — or stamp LV devices (fire, data, thermostats). Quantities
+              show up here automatically.
             </p>
             <Link
               href={`/projects/${p.id}`}

@@ -13,6 +13,15 @@ import { Button } from "@/components/ui/Button";
 import { runCircuitChecks, farthestFromRoutes } from "@/lib/checks";
 import { isCalibrated } from "@/lib/scale";
 import { circuitHue } from "@/lib/routing";
+import {
+  dataRouteReady,
+  dimmingFollows,
+  dimmingTotalPlanFt,
+  findThermostats,
+  fireRouteReady,
+  LV_COLORS,
+} from "@/lib/lv-routing";
+import { DEFAULT_SETTINGS } from "@/lib/types";
 
 type Props = {
   selected: Device[];
@@ -34,6 +43,8 @@ type Props = {
   onRoute: (circuitId: string) => void;
   onRouteAll: () => void;
   onResetRoutes: (circuitId: string) => void;
+  onRouteFire: () => void;
+  onRouteData: () => void;
   editRoutes: boolean;
   onToggleEditRoutes: () => void;
   checkDetail: CodeCheck | null;
@@ -114,6 +125,8 @@ function CircuitsTab({
   onRoute,
   onRouteAll,
   onResetRoutes,
+  onRouteFire,
+  onRouteData,
   editRoutes,
   onToggleEditRoutes,
   onCheckClick,
@@ -139,6 +152,17 @@ function CircuitsTab({
 
   const calibrated = isCalibrated(ftPerPx);
   const activePanel = panelId || panels[0]?.id || "";
+  const merged = { ...DEFAULT_SETTINGS, ...settings };
+
+  const dimmingLf = useMemo(() => {
+    const follows = dimmingFollows({ circuits, devices, routes });
+    return dimmingTotalPlanFt(follows);
+  }, [circuits, devices, routes]);
+
+  const stats = useMemo(() => findThermostats(devices), [devices]);
+  const stubLf = stats.length * (merged.lv_stub_ft ?? 10);
+  const fireOk = fireRouteReady(devices);
+  const dataOk = dataRouteReady(devices);
 
   return (
     <div className="space-y-4">
@@ -292,6 +316,88 @@ function CircuitsTab({
           <li className="text-xs text-gray-500">No circuits yet.</li>
         )}
       </ul>
+
+      <section className="space-y-2 border-t border-perry-silver pt-3">
+        <h3 className="font-display text-sm">LV systems</h3>
+
+        <div className="rounded-md border border-perry-silver p-2">
+          <div className="flex items-center justify-between gap-1">
+            <span
+              className="text-xs font-semibold"
+              style={{ color: LV_COLORS.fire }}
+            >
+              Fire alarm
+            </span>
+          </div>
+          <Button
+            type="button"
+            className="mt-2 w-full !px-2 !py-1 !text-[11px]"
+            disabled={!calibrated}
+            onClick={onRouteFire}
+          >
+            Route
+          </Button>
+          {!fireOk.ok && (
+            <p className="mt-1 text-[10px] text-gray-500">{fireOk.missing}</p>
+          )}
+        </div>
+
+        <div className="rounded-md border border-perry-silver p-2">
+          <div className="flex items-center justify-between gap-1">
+            <span
+              className="text-xs font-semibold"
+              style={{ color: LV_COLORS.data }}
+            >
+              Data
+            </span>
+          </div>
+          <Button
+            type="button"
+            className="mt-2 w-full !px-2 !py-1 !text-[11px]"
+            disabled={!calibrated}
+            onClick={onRouteData}
+          >
+            Route
+          </Button>
+          {!dataOk.ok && (
+            <p className="mt-1 text-[10px] text-gray-500">{dataOk.missing}</p>
+          )}
+        </div>
+
+        <div className="rounded-md border border-perry-silver p-2">
+          <div className="flex items-center justify-between">
+            <span
+              className="text-xs font-semibold"
+              style={{ color: LV_COLORS.dimming }}
+            >
+              Dimming
+            </span>
+            <span className="text-[10px] tabular-nums text-gray-600">
+              {dimmingLf.toFixed(1)} LF
+            </span>
+          </div>
+          <p className="mt-1 text-[10px] text-gray-500">
+            Follows lighting branch + switch leg (no Route button).
+          </p>
+        </div>
+
+        <div className="rounded-md border border-perry-silver p-2">
+          <div className="flex items-center justify-between">
+            <span
+              className="text-xs font-semibold"
+              style={{ color: LV_COLORS.stat }}
+            >
+              Thermostats
+            </span>
+            <span className="text-[10px] tabular-nums text-gray-600">
+              {stats.length} · {stubLf.toFixed(0)} LF stub
+            </span>
+          </div>
+          <p className="mt-1 text-[10px] text-gray-500">
+            Stub only — no routing.
+          </p>
+        </div>
+      </section>
     </div>
   );
 }

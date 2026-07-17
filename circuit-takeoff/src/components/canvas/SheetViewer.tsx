@@ -41,6 +41,16 @@ import { StampPicker } from "./StampPicker";
 import { pointerInNodeLocal } from "@/lib/konva-coords";
 import { glueRoutesToMovedDevice, routeCircuit } from "@/lib/routing";
 import {
+  dataRouteReady,
+  findDataDrops,
+  findFacp,
+  findFireDevices,
+  findIdfRooms,
+  fireRouteReady,
+  routeDataSystem,
+  routeFireSystem,
+} from "@/lib/lv-routing";
+import {
   fitSizeForRotation,
   normalizeRotation,
   rotateStep,
@@ -57,7 +67,6 @@ import type {
   Route,
 } from "@/lib/types";
 import { DEFAULT_SETTINGS } from "@/lib/types";
-
 type UndoAction =
   | { kind: "stamp"; device: Device }
   | { kind: "delete"; devices: Device[] }
@@ -198,15 +207,24 @@ export function SheetViewer({
       const circuitRows = (ckts as Circuit[]) || [];
       setCircuits(circuitRows);
       const ids = circuitRows.map((c) => c.id);
-      if (ids.length) {
-        const { data: rts } = await supabase
-          .from("routes")
-          .select("*")
-          .in("circuit_id", ids);
-        setRoutes((rts as Route[]) || []);
-      } else {
-        setRoutes([]);
-      }
+      const powerQ = ids.length
+        ? supabase.from("routes").select("*").in("circuit_id", ids)
+        : Promise.resolve({ data: [] as Route[], error: null });
+      const lvQ = supabase
+        .from("routes")
+        .select("*")
+        .eq("sheet_id", sheetId);
+      const [{ data: powerRts }, { data: lvRts }] = await Promise.all([
+        powerQ,
+        lvQ,
+      ]);
+      const merged = [
+        ...((powerRts as Route[]) || []),
+        ...((lvRts as Route[]) || []),
+      ];
+      // Dedupe by id (shouldn't overlap)
+      const byId = new Map(merged.map((r) => [r.id, r]));
+      setRoutes(Array.from(byId.values()));
       setSheetLoading(false);
     })();
   }, [sheetId, showError]);
@@ -1132,6 +1150,7 @@ export function SheetViewer({
               {ftPerPx && (
                 <RouteLayer
                   circuits={circuits}
+                  devices={devices}
                   routes={routes}
                   ftPerPx={ftPerPx}
                   selectedRouteId={selectedRouteId}
@@ -1453,7 +1472,7 @@ export function SheetViewer({
             );
           }
           const supabase = createClient();
-          const kept = routes.filter((r) => r.user_edited);
+          const kept = routes.filter((r) => r.user_edited || !!r.lv_system);
           const cktIds = circuits.map((c) => c.id);
           if (cktIds.length) {
             await supabase
@@ -1494,6 +1513,104 @@ export function SheetViewer({
             inserted.push(...((data as Route[]) || []));
           }
           setRoutes([...kept, ...inserted]);
+        }}
+        onRouteFire={async () => {
+          if (!ftPerPx) {
+            showError("Calibrate scale before routing.");
+            return;
+          }
+          const ready = fireRouteReady(devices);
+          if (!ready.ok) {
+            showError(ready.missing);
+            return;
+          }
+          const facp = findFacp(devices)!;
+          const fireDevs = findFireDevices(devices);
+          const proposed = routeFireSystem({
+            facp,
+            fireDevices: fireDevs,
+            ftPerPx,
+          });
+          const supabase = createClient();
+          await supabase
+            .from("routes")
+            .delete()
+            .eq("sheet_id", sheetId)
+            .eq("lv_system", "fire")
+            .eq("user_edited", false);
+          const keep = routes.filter(
+            (r) => r.lv_system !== "fire" || r.user_edited
+          );
+          if (!proposed.length) {
+            setRoutes(keep);
+            return;
+          }
+          const { data, error } = await supabase
+            .from("routes")
+            .insert(
+              proposed.map((p) => ({
+                circuit_id: null,
+                sheet_id: sheetId,
+                lv_system: "fire",
+                kind: p.kind,
+                path: p.path,
+                plan_length_ft: p.plan_length_ft,
+                user_edited: false,
+              }))
+            )
+            .select("*");
+          if (error) {
+            showError(error.message);
+            return;
+          }
+          setRoutes([...keep, ...((data as Route[]) || [])]);
+        }}
+        onRouteData={async () => {
+          if (!ftPerPx) {
+            showError("Calibrate scale before routing.");
+            return;
+          }
+          const ready = dataRouteReady(devices);
+          if (!ready.ok) {
+            showError(ready.missing);
+            return;
+          }
+          const idfs = findIdfRooms(devices);
+          const drops = findDataDrops(devices);
+          const proposed = routeDataSystem({ idfs, drops, ftPerPx });
+          const supabase = createClient();
+          await supabase
+            .from("routes")
+            .delete()
+            .eq("sheet_id", sheetId)
+            .eq("lv_system", "data")
+            .eq("user_edited", false);
+          const keep = routes.filter(
+            (r) => r.lv_system !== "data" || r.user_edited
+          );
+          if (!proposed.length) {
+            setRoutes(keep);
+            return;
+          }
+          const { data, error } = await supabase
+            .from("routes")
+            .insert(
+              proposed.map((p) => ({
+                circuit_id: null,
+                sheet_id: sheetId,
+                lv_system: "data",
+                kind: p.kind,
+                path: p.path,
+                plan_length_ft: p.plan_length_ft,
+                user_edited: false,
+              }))
+            )
+            .select("*");
+          if (error) {
+            showError(error.message);
+            return;
+          }
+          setRoutes([...keep, ...((data as Route[]) || [])]);
         }}
         onResetRoutes={async (circuitId) => {
           const supabase = createClient();

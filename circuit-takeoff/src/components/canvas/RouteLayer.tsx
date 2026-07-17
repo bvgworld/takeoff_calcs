@@ -3,10 +3,13 @@
 import { Group, Line, Circle, Arrow } from "react-konva";
 import type { Circuit, Point, Route } from "@/lib/types";
 import { circuitHue, planLengthFt, snapOrthogonalBend } from "@/lib/routing";
+import { LV_COLORS, LV_DASH, dimmingFollows } from "@/lib/lv-routing";
+import type { Device } from "@/lib/types";
 import { pointerInParentLocal } from "@/lib/konva-coords";
 
 type Props = {
   circuits: Circuit[];
+  devices: Device[];
   routes: Route[];
   ftPerPx: number;
   selectedRouteId: string | null;
@@ -22,6 +25,7 @@ type Props = {
 
 export function RouteLayer({
   circuits,
+  devices,
   routes,
   ftPerPx,
   selectedRouteId,
@@ -30,16 +34,26 @@ export function RouteLayer({
   onPathChange,
 }: Props) {
   const byCkt = new Map(circuits.map((c) => [c.id, c]));
+  const dimming = dimmingFollows({ circuits, devices, routes });
 
   return (
     <Group>
       {routes.map((r) => {
-        const ckt = byCkt.get(r.circuit_id);
-        const hue = ckt ? circuitHue(ckt.number) : "#2C64F2";
+        const lv = r.lv_system;
+        const ckt = r.circuit_id ? byCkt.get(r.circuit_id) : undefined;
+        const hue = lv
+          ? LV_COLORS[lv]
+          : ckt
+            ? circuitHue(ckt.number)
+            : "#2C64F2";
         const flat = r.path.flatMap((p) => [p.x, p.y]);
         const selected = r.id === selectedRouteId;
         const heavy = r.kind === "homerun";
-        const dash = r.kind === "switchleg" ? [8, 5] : undefined;
+        const dash = lv
+          ? LV_DASH[lv]
+          : r.kind === "switchleg"
+            ? [8, 5]
+            : undefined;
 
         return (
           <Group key={r.id}>
@@ -56,13 +70,12 @@ export function RouteLayer({
                 onSelectRoute(r.id);
               }}
             />
-            {r.kind === "homerun" && r.path.length >= 2 && (
+            {r.kind === "homerun" && r.path.length >= 2 && !lv && (
               <HomeRunDecor path={r.path} color={hue} />
             )}
             {editMode &&
               selected &&
               r.path.map((p, i) => {
-                // Endpoints stay glued to devices — not draggable.
                 if (i === 0 || i === r.path.length - 1) return null;
                 return (
                   <Circle
@@ -105,6 +118,26 @@ export function RouteLayer({
           </Group>
         );
       })}
+
+      {/* Dimming follow overlay — distinct dash on existing branch/switchleg */}
+      {dimming.flatMap((f) =>
+        f.paths.map((seg, i) => {
+          if (seg.path.length < 2) return null;
+          return (
+            <Line
+              key={`dim-${f.circuitId}-${i}`}
+              points={seg.path.flatMap((p) => [p.x, p.y])}
+              stroke={LV_COLORS.dimming}
+              strokeWidth={2}
+              dash={LV_DASH.dimming}
+              lineCap="round"
+              lineJoin="round"
+              listening={false}
+              opacity={0.85}
+            />
+          );
+        })
+      )}
     </Group>
   );
 }

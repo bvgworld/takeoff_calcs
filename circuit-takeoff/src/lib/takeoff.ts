@@ -1,6 +1,7 @@
 import { getCatalogEntry } from "./catalog";
 import { runCircuitChecks, farthestFromRoutes } from "./checks";
 import { resolveCatalogId } from "./devices";
+import { buildLvTakeoff } from "./lv-routing";
 import { pickMcCable, parseWireLabel, thhnItem } from "./materials";
 import { applyLengthAdders } from "./routing";
 import type {
@@ -10,7 +11,11 @@ import type {
   ProjectSettings,
   Route,
 } from "./types";
+import { DEFAULT_SETTINGS } from "./types";
 
+function mergeSettings(settings: ProjectSettings): ProjectSettings {
+  return { ...DEFAULT_SETTINGS, ...settings };
+}
 /** Home-run entries within this distance (feet) may share a pipe. */
 export const HR_SHARE_RADIUS_FT = 15;
 
@@ -160,11 +165,11 @@ export function takeoffForCircuit(opts: {
     circuit,
     devices,
     routes,
-    settings,
     pipeGroupSize = 1,
     ownsPipe = true,
     maxHrPlanFt,
   } = opts;
+  const settings = mergeSettings(opts.settings);
 
   const label = `Ckt ${circuit.number}`;
   const onCkt = devices.filter(
@@ -353,10 +358,12 @@ export function buildProjectTakeoff(opts: {
   /** Image scale (ft/px) keyed by sheet_id — required for HR clustering. */
   ftPerPxBySheetId: Map<string, number> | Record<string, number>;
 }): { lines: TakeoffLine[]; totals: TakeoffLine[] } {
-  const { circuits, devices, routes, settings } = opts;
+  const { circuits, devices, routes } = opts;
+  const settings = mergeSettings(opts.settings);
   const ftPerPxBySheetId = toFtPerPxMap(opts.ftPerPxBySheetId);
   const byCkt = new Map<string, Route[]>();
   for (const r of routes) {
+    if (!r.circuit_id) continue;
     const list = byCkt.get(r.circuit_id) || [];
     list.push(r);
     byCkt.set(r.circuit_id, list);
@@ -364,7 +371,7 @@ export function buildProjectTakeoff(opts: {
   const pipes = groupHomeRunPipes(circuits, byCkt, ftPerPxBySheetId);
 
   const ordered = [...circuits].sort((a, b) => a.number - b.number);
-  const lines = ordered.flatMap((c) => {
+  const powerLines = ordered.flatMap((c) => {
     const pipe = pipes.get(c.id);
     return takeoffForCircuit({
       circuit: c,
@@ -376,6 +383,15 @@ export function buildProjectTakeoff(opts: {
       maxHrPlanFt: pipe?.maxHrPlanFt,
     });
   });
+
+  const lvLines = buildLvTakeoff({
+    circuits,
+    devices,
+    routes,
+    settings,
+  }) as TakeoffLine[];
+
+  const lines = [...powerLines, ...lvLines];
 
   const map = new Map<string, TakeoffLine>();
   for (const l of lines) {

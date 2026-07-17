@@ -321,14 +321,6 @@ export const CATALOG: CatalogEntry[] = [
     attrs: { lvSystem: "data" },
     assembly: [{ item: "IDF/rack termination", qty: 1, uom: "EA" }],
   },
-  {
-    id: "head-rtu",
-    category: "headend",
-    label: "RTU / Mech unit",
-    symbol: "square",
-    attrs: { lvSystem: "stat" },
-    assembly: [{ item: "RTU control termination", qty: 1, uom: "EA" }],
-  },
 
   // —— Fire alarm devices ——
   {

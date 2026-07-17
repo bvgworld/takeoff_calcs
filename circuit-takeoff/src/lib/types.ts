@@ -13,6 +13,8 @@ export type ProjectSettings = {
   branch_method: BranchMethod;
   lighting_voltage: number;
   receptacle_voltage: number;
+  /** LV stub length (thermostat / data drops), feet. */
+  lv_stub_ft: number;
 };
 
 export const DEFAULT_SETTINGS: ProjectSettings = {
@@ -24,6 +26,7 @@ export const DEFAULT_SETTINGS: ProjectSettings = {
   branch_method: "mc",
   lighting_voltage: 277,
   receptacle_voltage: 120,
+  lv_stub_ft: 10,
 };
 
 export type Project = {
@@ -87,11 +90,19 @@ export type Circuit = {
 
 export type RouteKind = "homerun" | "branch" | "switchleg";
 
+/** Routed LV systems (dimming/stat are not stored as routes). */
+export type LvRouteSystem = "fire" | "data";
+
 export type Point = { x: number; y: number };
 
 export type Route = {
   id: string;
-  circuit_id: string;
+  /** Power circuit; null when this is an LV route. */
+  circuit_id: string | null;
+  /** Sheet ownership for LV routes (fire/data). */
+  sheet_id?: string | null;
+  /** Set for fire/data routes; null/undefined for power. */
+  lv_system?: LvRouteSystem | null;
   kind: RouteKind;
   path: Point[];
   plan_length_ft: number;

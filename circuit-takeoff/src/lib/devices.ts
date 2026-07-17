@@ -51,7 +51,6 @@ export function defaultAttrsForCatalog(
   if (entry.category === "headend") {
     if (entry.id === "head-facp") return { label: "FACP" };
     if (entry.id === "head-idf") return { label: "IDF" };
-    if (entry.id === "head-rtu") return { label: "RTU" };
     return { label: entry.label.slice(0, 6) };
   }
   return { label: entry.label.slice(0, 4) };

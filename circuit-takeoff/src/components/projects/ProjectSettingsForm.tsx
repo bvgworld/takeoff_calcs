@@ -4,6 +4,7 @@ import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import type { BranchMethod, ProjectSettings } from "@/lib/types";
+import { DEFAULT_SETTINGS } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { useToast } from "@/components/ui/Toast";
 
@@ -16,7 +17,10 @@ export function ProjectSettingsForm({
 }) {
   const router = useRouter();
   const { showError } = useToast();
-  const [s, setS] = useState<ProjectSettings>(initial);
+  const [s, setS] = useState<ProjectSettings>({
+    ...DEFAULT_SETTINGS,
+    ...initial,
+  });
   const [busy, setBusy] = useState(false);
 
   function num(key: keyof ProjectSettings, v: string) {
@@ -67,6 +71,7 @@ export function ProjectSettingsForm({
       {field("Switch drop (ft)", "switch_drop_ft")}
       {field("Makeup per box (ft)", "makeup_per_box_ft")}
       {field("Waste %", "waste_pct")}
+      {field("LV stub (ft)", "lv_stub_ft")}
       {field("Lighting voltage", "lighting_voltage")}
       {field("Receptacle voltage", "receptacle_voltage")}
       <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500">
