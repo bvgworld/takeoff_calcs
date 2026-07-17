@@ -1,6 +1,7 @@
 import { getCatalogEntry } from "./catalog";
 import { runCircuitChecks, farthestFromRoutes } from "./checks";
 import { resolveCatalogId } from "./devices";
+import { pickMcCable, parseWireLabel, thhnItem } from "./materials";
 import { applyLengthAdders } from "./routing";
 import type {
   Circuit,
@@ -195,8 +196,7 @@ export function takeoffForCircuit(opts: {
     settings,
   });
 
-  const wire = checks.wireSize.replace("#", "");
-  const upsized = checks.wireSize !== "#12";
+  const wireSize = parseWireLabel(checks.wireSize);
   const waste = 1 + settings.waste_pct / 100;
   /** 2 hots/neutrals per circuit + 1 shared ground. */
   const totalWires = ckts * 2 + 1;
@@ -207,6 +207,10 @@ export function takeoffForCircuit(opts: {
   const mc = settings.branch_method === "mc";
   const segs =
     circuit.ctype === "lighting" ? Math.max(n, 0) : Math.max(0, n - 1);
+  const insulatedBranch =
+    circuit.ctype === "lighting" && switches.length > 0 ? 3 : 2;
+  const mcItem = pickMcCable(wireSize, insulatedBranch);
+  const thhn = thhnItem(wireSize);
 
   const rows: TakeoffLine[] = [];
   const push = (
@@ -246,12 +250,18 @@ export function takeoffForCircuit(opts: {
       "EA",
       `ceil(HR/10)+2`
     );
+    const hrUp =
+      checks.wireSize !== "#12" && circuit.breaker_amps <= 20
+        ? ` · upsized from #12 for VD`
+        : circuit.breaker_amps > 20
+          ? ` · ${checks.wireSize} for ${circuit.breaker_amps}A`
+          : "";
     push(
-      `#${wire} THHN cu`,
+      thhn,
       hrWire,
       "LF",
       `(${hrLen.toFixed(1)}+${makeup}×${hrBoxes})×${totalWires}×${waste.toFixed(2)}` +
-        (upsized ? ` · upsized from #12 for VD` : "")
+        hrUp
     );
   }
 
@@ -259,11 +269,11 @@ export function takeoffForCircuit(opts: {
   if (mc) {
     const mcLen = Math.ceil(branchLen * waste);
     push(
-      `${wire}/2 MC cable`,
+      mcItem,
       mcLen,
       "LF",
       `branch+switchleg=${branchLen.toFixed(1)}×${waste.toFixed(2)}` +
-        (upsized ? ` · ${checks.wireSize}` : "")
+        (checks.wireSize !== "#12" ? ` · ${checks.wireSize}` : "")
     );
     push("MC connectors + anti-shorts", segs * 2, "EA", `2×${segs} segments`);
     push(
@@ -283,16 +293,21 @@ export function takeoffForCircuit(opts: {
       "EA",
       ""
     );
+    const brUp =
+      checks.wireSize !== "#12" && circuit.breaker_amps <= 20
+        ? ` · upsized from #12 for VD`
+        : circuit.breaker_amps > 20
+          ? ` · ${checks.wireSize} for ${circuit.breaker_amps}A`
+          : "";
     push(
-      `#${wire} THHN cu`,
+      thhn,
       brWire,
       "LF",
       `(${branchLen.toFixed(1)}+makeup×${boxCount})×3×${waste.toFixed(2)}` +
-        (upsized ? ` · upsized from #12 for VD` : "")
+        brUp
     );
     push("Straps", Math.ceil(branchLen / 10) + segs, "EA", "");
   }
-
   // Device assemblies from catalog (per subtype)
   const assemblyDevs = onCkt.filter(
     (d) => d.type !== "panel" && d.id !== circuit.panel_device_id
@@ -313,7 +328,12 @@ export function takeoffForCircuit(opts: {
     push(item, v.qty, uom, v.notes);
   });
 
-  push("20A 1-pole breaker + termination", 1, "EA", "");
+  push(
+    `${circuit.breaker_amps}A 1-pole breaker + termination`,
+    1,
+    "EA",
+    ""
+  );
 
   return rows;
 }
