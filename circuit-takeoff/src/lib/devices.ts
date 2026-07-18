@@ -30,6 +30,16 @@ export function nextPanelLabel(devices: Device[]): string {
   return `LP-${max + 1}`;
 }
 
+export function nextJboxLabel(devices: Device[]): string {
+  let max = 0;
+  for (const d of devices) {
+    if (d.type !== "jbox") continue;
+    const m = (d.attrs.label || "").match(/^JB-(\d+)$/i);
+    if (m) max = Math.max(max, Number(m[1]));
+  }
+  return `JB-${max + 1}`;
+}
+
 export function defaultAttrsForCatalog(
   catalogId: string,
   devices: Device[]
@@ -37,6 +47,7 @@ export function defaultAttrsForCatalog(
   const entry = getCatalogEntry(catalogId);
   if (!entry) return { label: "?" };
   if (entry.category === "panel") return { label: nextPanelLabel(devices) };
+  if (entry.category === "jbox") return { label: nextJboxLabel(devices) };
   if (entry.category === "fixture") {
     return {
       label: "F",
@@ -75,6 +86,7 @@ export function countByCategory(
     thermostat: 0,
     headend: 0,
     fire: 0,
+    jbox: 0,
   };
   for (const d of devices) {
     const cat = (d.type || getCatalogEntry(d.catalog_id)?.category) as

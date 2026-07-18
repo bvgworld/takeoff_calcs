@@ -38,6 +38,7 @@ function device(
         thermostat: "stat-wall",
         headend: "head-facp",
         fire: "fire-smoke",
+        jbox: "jbox-4sq",
       } as Record<string, string>)[partial.type] ||
       "recep-duplex-20",
     created_at: "",
@@ -151,6 +152,55 @@ describe("routeCircuit", () => {
     expect(end.x).toBe(50);
     expect(end.y).toBe(0);
     expect(routes.some((r) => r.kind === "switchleg")).toBe(true);
+  });
+
+  it("entry override → HR ends at J-box and MST includes it", () => {
+    const jb = device({ id: "jb1", type: "jbox", x: 40, y: 20 });
+    const a = device({ id: "a", type: "receptacle", x: 100, y: 0 });
+    const b = device({ id: "b", type: "receptacle", x: 100, y: 100 });
+    const routes = routeCircuit({
+      panel,
+      devicesOnCircuit: [jb, a, b],
+      ctype: "receptacle",
+      ftPerPx: 1,
+      entryDeviceId: "jb1",
+    });
+    const hr = routes.find((r) => r.kind === "homerun")!;
+    const end = hr.path[hr.path.length - 1];
+    expect(end.x).toBe(40);
+    expect(end.y).toBe(20);
+    const branches = routes.filter((r) => r.kind === "branch");
+    expect(branches.length).toBe(2); // MST over jbox + 2 receptacles
+    const touchesJbox = branches.some((r) =>
+      r.path.some((p) => p.x === 40 && p.y === 20)
+    );
+    expect(touchesJbox).toBe(true);
+  });
+
+  it("null entry → identical output to pre-change auto path", () => {
+    const a = device({ id: "a", type: "fixture", x: 100, y: 0 });
+    const b = device({ id: "b", type: "fixture", x: 100, y: 100 });
+    const sw = device({ id: "s", type: "switch", x: 50, y: 0 });
+    const withNull = routeCircuit({
+      panel,
+      devicesOnCircuit: [sw, a, b],
+      ctype: "lighting",
+      ftPerPx: 1,
+      entryDeviceId: null,
+    });
+    const omitted = routeCircuit({
+      panel,
+      devicesOnCircuit: [sw, a, b],
+      ctype: "lighting",
+      ftPerPx: 1,
+    });
+    expect(withNull).toEqual(omitted);
+    // Pre-change snapshot: HR lands at switch; one branch; one switchleg.
+    expect(withNull.filter((r) => r.kind === "branch")).toHaveLength(1);
+    expect(withNull.filter((r) => r.kind === "switchleg")).toHaveLength(1);
+    const hr = withNull.find((r) => r.kind === "homerun")!;
+    expect(hr.path[hr.path.length - 1]).toEqual({ x: 50, y: 0 });
+    expect(hr.plan_length_ft).toBe(50);
   });
 });
 

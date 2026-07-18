@@ -177,6 +177,19 @@ export function nearestDeviceIndex(from: Point, devices: Device[]): number {
   return best;
 }
 
+/** Circuit-assigned devices plus optional HR entry (may be sheet-scoped). */
+export function devicesForCircuitRouting(
+  devices: Device[],
+  circuitId: string,
+  entryDeviceId?: string | null
+): Device[] {
+  const onCkt = devices.filter((d) => d.circuit_id === circuitId);
+  if (!entryDeviceId) return onCkt;
+  if (onCkt.some((d) => d.id === entryDeviceId)) return onCkt;
+  const entry = devices.find((d) => d.id === entryDeviceId);
+  return entry ? [...onCkt, entry] : onCkt;
+}
+
 export type ProposedRoute = {
   kind: RouteKind;
   path: Point[];
@@ -193,30 +206,53 @@ export type RouteTotals = {
 /**
  * routeCircuit — Section 4 exactly.
  * plan_length_ft stores plan only; adders applied via applyLengthAdders.
+ *
+ * When entryDeviceId is set, HR lands at that device and (unless it is the
+ * lighting switch) it is included in the branch MST so the chain hangs off it.
+ * When null/undefined, behavior matches the pre-entry auto nearest path.
  */
 export function routeCircuit(opts: {
   panel: Device;
   devicesOnCircuit: Device[];
   ctype: "lighting" | "receptacle";
   ftPerPx: number;
+  /** Optional HR entry override (J-box or switch). Null/undefined = auto. */
+  entryDeviceId?: string | null;
 }): ProposedRoute[] {
-  const { panel, devicesOnCircuit, ctype, ftPerPx } = opts;
+  const { panel, devicesOnCircuit, ctype, ftPerPx, entryDeviceId } = opts;
   const routes: ProposedRoute[] = [];
 
+  // Branch devices: exclude panel, switch, and jbox (jbox only joins MST when entry).
   const D = devicesOnCircuit.filter(
-    (d) => d.type !== "panel" && d.type !== "switch"
+    (d) =>
+      d.type !== "panel" && d.type !== "switch" && d.type !== "jbox"
   );
   const S =
     ctype === "lighting"
       ? devicesOnCircuit.find((d) => d.type === "switch") ?? null
       : null;
 
-  if (D.length === 0 && !S) return routes;
+  const override = entryDeviceId
+    ? devicesOnCircuit.find((d) => d.id === entryDeviceId) ?? null
+    : null;
 
-  const points = D.map((d) => ({ x: d.x, y: d.y }));
+  if (D.length === 0 && !S && !override) return routes;
+
+  // MST nodes: branch devices, plus non-switch entry so the chain hangs off it.
+  const mstDevices = [...D];
+  if (
+    override &&
+    override.type !== "switch" &&
+    override.type !== "panel" &&
+    !mstDevices.some((d) => d.id === override.id)
+  ) {
+    mstDevices.push(override);
+  }
+
+  const points = mstDevices.map((d) => ({ x: d.x, y: d.y }));
 
   // 1. BRANCH CHAIN — Prim MST
-  if (D.length >= 2) {
+  if (mstDevices.length >= 2) {
     for (const [i, j] of primMst(points)) {
       const path = orthogonalPolyline(points[i], points[j]);
       routes.push({
@@ -230,7 +266,23 @@ export function routeCircuit(opts: {
 
   // 2. ENTRY + switchleg
   let entry: Device;
-  if (ctype === "lighting" && S) {
+  if (override) {
+    entry = override;
+    // Switch-leg unchanged when the entry IS the switch.
+    if (ctype === "lighting" && entry.type === "switch" && D.length > 0) {
+      const fi = nearestDeviceIndex({ x: entry.x, y: entry.y }, D);
+      const path = orthogonalPolyline(
+        { x: entry.x, y: entry.y },
+        { x: D[fi].x, y: D[fi].y }
+      );
+      routes.push({
+        kind: "switchleg",
+        path,
+        plan_length_ft: planLengthFt(path, ftPerPx),
+        user_edited: false,
+      });
+    }
+  } else if (ctype === "lighting" && S) {
     entry = S;
     if (D.length > 0) {
       const fi = nearestDeviceIndex({ x: S.x, y: S.y }, D);

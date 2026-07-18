@@ -23,6 +23,7 @@ function circuit(
     ctype: "receptacle",
     voltage: 120,
     breaker_amps: 20,
+    entry_device_id: null,
     created_at: "",
     ...partial,
   };
@@ -45,6 +46,7 @@ function device(
         thermostat: "stat-wall",
         headend: "head-facp",
         fire: "fire-smoke",
+        jbox: "jbox-4sq",
       } as Record<string, string>)[partial.type] ||
       "recep-duplex-20",
     created_at: "",
@@ -240,6 +242,7 @@ describe("shared home-run pipe", () => {
 
     const byCkt = new Map<string, Route[]>();
     for (const r of routes) {
+      if (!r.circuit_id) continue;
       const list = byCkt.get(r.circuit_id) || [];
       list.push(r);
       byCkt.set(r.circuit_id, list);
@@ -289,6 +292,124 @@ describe("zero routes → zero LF", () => {
     expect(summary.emtLf).toBe(0);
     expect(summary.mcLf).toBe(0);
     expect(summary.wireLf).toBe(0);
+  });
+});
+
+describe("jbox assemblies", () => {
+  it("emits jbox assembly lines once per box on the circuit", () => {
+    const c = circuit({ id: "c1", number: 1 });
+    const devices = [
+      device({ id: "panel1", type: "panel", x: 0, y: 0, circuit_id: null }),
+      device({ id: "r1", type: "receptacle", x: 100, y: 0 }),
+      device({
+        id: "jb1",
+        type: "jbox",
+        catalog_id: "jbox-4sq",
+        x: 50,
+        y: 0,
+        attrs: { label: "JB-1" },
+      }),
+      device({
+        id: "jb2",
+        type: "jbox",
+        catalog_id: "jbox-4sq",
+        x: 60,
+        y: 0,
+        attrs: { label: "JB-2" },
+      }),
+    ];
+    const routes = [
+      route({
+        id: "hr",
+        circuit_id: "c1",
+        kind: "homerun",
+        plan_length_ft: 10,
+        path: [
+          { x: 0, y: 0 },
+          { x: 50, y: 0 },
+        ],
+      }),
+    ];
+    const lines = takeoffForCircuit({
+      circuit: c,
+      devices,
+      routes,
+      settings,
+    });
+    const boxes = lines.find((l) => l.item === '4" sq J-box');
+    const covers = lines.find((l) => l.item === "Blank cover");
+    const supports = lines.find((l) => l.item === "Box support");
+    expect(boxes?.qty).toBe(2);
+    expect(covers?.qty).toBe(2);
+    expect(supports?.qty).toBe(2);
+  });
+
+  it("HR note lands at JB label when entry_device_id is set", () => {
+    const c = circuit({
+      id: "c1",
+      number: 1,
+      entry_device_id: "jb1",
+    });
+    const devices = [
+      device({ id: "panel1", type: "panel", x: 0, y: 0, circuit_id: null }),
+      device({ id: "r1", type: "receptacle", x: 100, y: 0 }),
+      device({
+        id: "jb1",
+        type: "jbox",
+        x: 50,
+        y: 0,
+        attrs: { label: "JB-1" },
+      }),
+    ];
+    const routes = [
+      route({
+        id: "hr",
+        circuit_id: "c1",
+        kind: "homerun",
+        plan_length_ft: 10,
+        path: [
+          { x: 0, y: 0 },
+          { x: 50, y: 0 },
+        ],
+      }),
+    ];
+    const lines = takeoffForCircuit({
+      circuit: c,
+      devices,
+      routes,
+      settings,
+    });
+    const hr = lines.find(
+      (l) => l.item.includes("EMT") && !l.item.includes("coupling")
+    );
+    expect(hr?.notes).toContain("lands at JB-1");
+  });
+
+  it("unassigned jboxes emit under Unassigned J-boxes section", () => {
+    const c = circuit({ id: "c1", number: 1 });
+    const devices = [
+      device({ id: "panel1", type: "panel", x: 0, y: 0, circuit_id: null }),
+      device({ id: "r1", type: "receptacle", x: 100, y: 0 }),
+      device({
+        id: "jb1",
+        type: "jbox",
+        catalog_id: "jbox-4-11-16",
+        x: 50,
+        y: 0,
+        circuit_id: null,
+        attrs: { label: "JB-1" },
+      }),
+    ];
+    const { lines } = buildProjectTakeoff({
+      circuits: [c],
+      devices,
+      routes: [],
+      settings,
+      ftPerPxBySheetId: { [SHEET]: FT_PER_PX },
+    });
+    const unassigned = lines.filter((l) => l.circuit === "Unassigned J-boxes");
+    expect(unassigned.some((l) => l.item === '4-11/16" sq J-box')).toBe(true);
+    expect(unassigned.some((l) => l.item === "Blank cover")).toBe(true);
   });
 });
 

@@ -43,6 +43,7 @@ type Props = {
   onRoute: (circuitId: string) => void;
   onRouteAll: () => void;
   onResetRoutes: (circuitId: string) => void;
+  onSetHrEntry: (circuitId: string, entryDeviceId: string | null) => void;
   onRouteFire: () => void;
   onRouteData: () => void;
   editRoutes: boolean;
@@ -126,6 +127,7 @@ function CircuitsTab({
   onRoute,
   onRouteAll,
   onResetRoutes,
+  onSetHrEntry,
   onRouteFire,
   onRouteData,
   editRoutes,
@@ -311,6 +313,7 @@ function CircuitsTab({
             calibrated={calibrated}
             onRoute={() => onRoute(c.id)}
             onReset={() => onResetRoutes(c.id)}
+            onSetHrEntry={(entryId) => onSetHrEntry(c.id, entryId)}
             onCheckClick={onCheckClick}
           />
         ))}
@@ -412,6 +415,7 @@ function CircuitRow({
   calibrated,
   onRoute,
   onReset,
+  onSetHrEntry,
   onCheckClick,
 }: {
   circuit: Circuit;
@@ -421,6 +425,7 @@ function CircuitRow({
   calibrated: boolean;
   onRoute: () => void;
   onReset: () => void;
+  onSetHrEntry: (entryDeviceId: string | null) => void;
   onCheckClick: (c: CodeCheck | null) => void;
 }) {
   const onCkt = devices.filter(
@@ -441,6 +446,9 @@ function CircuitRow({
 
   const hue = circuitHue(circuit.number);
   const nDev = devices.filter((d) => d.circuit_id === circuit.id).length;
+  const entryCandidates = devices.filter(
+    (d) => d.type === "jbox" || d.type === "switch"
+  );
 
   return (
     <li className="rounded-md border border-perry-silver p-2">
@@ -468,6 +476,24 @@ function CircuitRow({
           </button>
         ))}
       </div>
+      <label className="mt-2 block text-[10px] font-semibold uppercase text-gray-500">
+        Set HR entry
+        <select
+          className="mt-0.5 w-full rounded border border-perry-silver bg-white px-1.5 py-1 text-[11px] font-normal normal-case text-gray-800"
+          value={circuit.entry_device_id ?? ""}
+          onChange={(e) =>
+            onSetHrEntry(e.target.value ? e.target.value : null)
+          }
+        >
+          <option value="">Auto (nearest)</option>
+          {entryCandidates.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.attrs.label || d.type}
+              {d.type === "jbox" ? " · J-box" : " · Switch"}
+            </option>
+          ))}
+        </select>
+      </label>
       <div className="mt-2 flex gap-1">
         <Button
           type="button"

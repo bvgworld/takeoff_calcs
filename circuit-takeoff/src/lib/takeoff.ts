@@ -234,13 +234,21 @@ export function takeoffForCircuit(opts: {
     const couplings = Math.max(0, Math.ceil(hrLen / 10) - 1);
     const straps = Math.ceil(hrLen / 10) + 2;
     const hrWire = Math.ceil((hrLen + makeup * hrBoxes) * totalWires * waste);
-    const shareNote =
+    const entryDev = circuit.entry_device_id
+      ? devices.find((d) => d.id === circuit.entry_device_id)
+      : null;
+  const landsAt =
+    entryDev?.attrs.label ||
+    (entryDev ? getCatalogEntry(resolveCatalogId(entryDev))?.label : null);
+  const landsNote = landsAt ? ` · lands at ${landsAt}` : "";
+  const shareNote =
       ckts > 1
-        ? `Shared HR (${ckts} ckts, ${totalWires} cond) · longest plan+stub=${hrLen.toFixed(1)}ft`
+        ? `Shared HR (${ckts} ckts, ${totalWires} cond) · longest plan+stub=${hrLen.toFixed(1)}ft${landsNote}`
         : `HR plan+stub=${hrLen.toFixed(1)}ft` +
           (ownHrLen !== hrLen
             ? ` (own ${ownHrLen.toFixed(1)})`
-            : "");
+            : "") +
+          landsNote;
     push(`${checks.emtSize} EMT`, Math.ceil(hrLen), "LF", shareNote);
     push(
       `${checks.emtSize} EMT couplings`,
@@ -391,7 +399,41 @@ export function buildProjectTakeoff(opts: {
     settings,
   }) as TakeoffLine[];
 
-  const lines = [...powerLines, ...lvLines];
+  // Unassigned J-boxes — assemblies not covered by any circuit takeoff.
+  const unassignedJboxes = devices.filter(
+    (d) => d.type === "jbox" && !d.circuit_id
+  );
+  const unassignedJboxLines: TakeoffLine[] = [];
+  const unassignedRolled = new Map<
+    string,
+    { qty: number; notes: string; uom: string }
+  >();
+  for (const d of unassignedJboxes) {
+    const entry = getCatalogEntry(resolveCatalogId(d));
+    if (!entry) continue;
+    for (const line of entry.assembly) {
+      const key = `${line.item}|${line.uom}`;
+      const cur = unassignedRolled.get(key) || {
+        qty: 0,
+        notes: entry.label,
+        uom: line.uom,
+      };
+      cur.qty += line.qty;
+      unassignedRolled.set(key, cur);
+    }
+  }
+  Array.from(unassignedRolled.entries()).forEach(([key, v]) => {
+    const [item] = key.split("|");
+    unassignedJboxLines.push({
+      circuit: "Unassigned J-boxes",
+      item,
+      qty: v.qty,
+      uom: v.uom,
+      notes: v.notes,
+    });
+  });
+
+  const lines = [...powerLines, ...lvLines, ...unassignedJboxLines];
 
   const map = new Map<string, TakeoffLine>();
   for (const l of lines) {

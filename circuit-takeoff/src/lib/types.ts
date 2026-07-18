@@ -87,6 +87,8 @@ export type Circuit = {
   ctype: CircuitType;
   voltage: number;
   breaker_amps: number;
+  /** Optional HR landing device (J-box or switch). Null = auto nearest. */
+  entry_device_id: string | null;
   created_at: string;
 };
 

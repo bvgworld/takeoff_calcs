@@ -10,7 +10,8 @@ export type CatalogCategory =
   | "panel"
   | "thermostat"
   | "headend"
-  | "fire";
+  | "fire"
+  | "jbox";
 
 export type CatalogSymbol =
   | "circle"
@@ -237,6 +238,32 @@ export const CATALOG: CatalogEntry[] = [
     assembly: [{ item: "Fixture connection / whip", qty: 1, uom: "EA" }],
   },
 
+  // —— Junction boxes ——
+  {
+    id: "jbox-4-11-16",
+    category: "jbox",
+    label: "4-11/16 sq J-box",
+    symbol: "square",
+    attrs: {},
+    assembly: [
+      { item: '4-11/16" sq J-box', qty: 1, uom: "EA" },
+      { item: "Blank cover", qty: 1, uom: "EA" },
+      { item: "Box support", qty: 1, uom: "EA" },
+    ],
+  },
+  {
+    id: "jbox-4sq",
+    category: "jbox",
+    label: "4 sq J-box",
+    symbol: "square",
+    attrs: {},
+    assembly: [
+      { item: '4" sq J-box', qty: 1, uom: "EA" },
+      { item: "Blank cover", qty: 1, uom: "EA" },
+      { item: "Box support", qty: 1, uom: "EA" },
+    ],
+  },
+
   // —— Switches ——
   {
     id: "sw-sp",
@@ -419,6 +446,7 @@ export const STAMP_CATEGORIES: {
   { id: "receptacle", label: "Receptacle" },
   { id: "fixture", label: "Fixture" },
   { id: "switch", label: "Switch" },
+  { id: "jbox", label: "J-box" },
   { id: "thermostat", label: "Thermostat" },
   { id: "fire", label: "Fire" },
   { id: "headend", label: "Head-end" },

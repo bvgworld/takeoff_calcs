@@ -42,6 +42,7 @@ import {
 import { StampPicker } from "./StampPicker";
 import { pointerInNodeLocal } from "@/lib/konva-coords";
 import {
+  devicesForCircuitRouting,
   glueRoutesToMovedDevice,
   recomputeRoutePlanLengths,
   routeCircuit,
@@ -220,7 +221,10 @@ export function SheetViewer({
           catalog_id: d.catalog_id || backfillCatalogId(d.type),
         }))
       );
-      const circuitRows = (ckts as Circuit[]) || [];
+      const circuitRows = ((ckts as Circuit[]) || []).map((c) => ({
+        ...c,
+        entry_device_id: c.entry_device_id ?? null,
+      }));
       setCircuits(circuitRows);
       const ids = circuitRows.map((c) => c.id);
       const powerQ = ids.length
@@ -1388,6 +1392,7 @@ export function SheetViewer({
             ctype,
             voltage,
             breaker_amps: 20,
+            entry_device_id: null,
             created_at: new Date().toISOString(),
           };
           setCircuits((prev) => [...prev, optimistic]);
@@ -1497,18 +1502,24 @@ export function SheetViewer({
             showError("Panel missing for this circuit.");
             return;
           }
-          const onCkt = devices.filter((d) => d.circuit_id === circuitId);
-          if (!onCkt.length) {
+          const assigned = devices.filter((d) => d.circuit_id === circuitId);
+          if (!assigned.length) {
             showError(
               `Circuit ${circuitDisplayLabel(circuit, devices)} has no devices — lasso-select devices and Assign first.`
             );
             return;
           }
+          const onCkt = devicesForCircuitRouting(
+            devices,
+            circuitId,
+            circuit.entry_device_id
+          );
           const proposed = routeCircuit({
             panel,
             devicesOnCircuit: onCkt,
             ctype: circuit.ctype,
             ftPerPx,
+            entryDeviceId: circuit.entry_device_id,
           });
           const supabase = createClient();
           // Keep user_edited routes
@@ -1570,13 +1581,18 @@ export function SheetViewer({
           for (const c of circuits) {
             const panel = devices.find((d) => d.id === c.panel_device_id);
             if (!panel) continue;
-            const onCkt = devices.filter((d) => d.circuit_id === c.id);
+            const onCkt = devicesForCircuitRouting(
+              devices,
+              c.id,
+              c.entry_device_id
+            );
             if (!onCkt.length) continue;
             const proposed = routeCircuit({
               panel,
               devicesOnCircuit: onCkt,
               ctype: c.ctype,
               ftPerPx,
+              entryDeviceId: c.entry_device_id,
             });
             if (!proposed.length) continue;
             const { data, error } = await supabase
@@ -1697,6 +1713,32 @@ export function SheetViewer({
           }
           setRoutes([...keep, ...((data as Route[]) || [])]);
         }}
+        onSetHrEntry={async (circuitId, entryDeviceId) => {
+          const prevEntry =
+            circuits.find((c) => c.id === circuitId)?.entry_device_id ?? null;
+          setCircuits((prev) =>
+            prev.map((c) =>
+              c.id === circuitId
+                ? { ...c, entry_device_id: entryDeviceId }
+                : c
+            )
+          );
+          const supabase = createClient();
+          const { error } = await supabase
+            .from("circuits")
+            .update({ entry_device_id: entryDeviceId })
+            .eq("id", circuitId);
+          if (error) {
+            showError(error.message);
+            setCircuits((prev) =>
+              prev.map((c) =>
+                c.id === circuitId
+                  ? { ...c, entry_device_id: prevEntry }
+                  : c
+              )
+            );
+          }
+        }}
         onResetRoutes={async (circuitId) => {
           const supabase = createClient();
           await supabase.from("routes").delete().eq("circuit_id", circuitId);
@@ -1706,12 +1748,17 @@ export function SheetViewer({
           const circuit = circuits.find((c) => c.id === circuitId);
           const panel = devices.find((d) => d.id === circuit?.panel_device_id);
           if (!circuit || !panel) return;
-          const onCkt = devices.filter((d) => d.circuit_id === circuitId);
+          const onCkt = devicesForCircuitRouting(
+            devices,
+            circuitId,
+            circuit.entry_device_id
+          );
           const proposed = routeCircuit({
             panel,
             devicesOnCircuit: onCkt,
             ctype: circuit.ctype,
             ftPerPx,
+            entryDeviceId: circuit.entry_device_id,
           });
           if (!proposed.length) return;
           const { data, error } = await supabase

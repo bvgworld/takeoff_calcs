@@ -75,6 +75,59 @@ function ConstantSizeBody({
     );
   }
 
+  // J-box: small square with X (constant screen size).
+  if (category === "jbox") {
+    const half = r12;
+    return (
+      <>
+        {selected && (
+          <Rect
+            x={-rSel}
+            y={-rSel}
+            width={rSel * 2}
+            height={rSel * 2}
+            stroke="#A01825"
+            strokeWidth={selStroke}
+            cornerRadius={2}
+          />
+        )}
+        <Rect
+          x={-half}
+          y={-half}
+          width={half * 2}
+          height={half * 2}
+          fill="#F6F7FC"
+          stroke="#141E2C"
+          strokeWidth={stroke}
+          cornerRadius={1}
+        />
+        <Line
+          points={[-half * 0.55, -half * 0.55, half * 0.55, half * 0.55]}
+          stroke="#141E2C"
+          strokeWidth={stroke}
+          listening={false}
+        />
+        <Line
+          points={[half * 0.55, -half * 0.55, -half * 0.55, half * 0.55]}
+          stroke="#141E2C"
+          strokeWidth={stroke}
+          listening={false}
+        />
+        <Text
+          text={label.slice(0, 6) || "JB"}
+          x={-half - 2}
+          y={half + 1}
+          width={half * 2 + 4}
+          align="center"
+          fontSize={8}
+          fontStyle="bold"
+          fill="#141E2C"
+          listening={false}
+        />
+      </>
+    );
+  }
+
   if (symbol === "circle") {
     return (
       <>

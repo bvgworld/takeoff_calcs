@@ -143,6 +143,7 @@ describe("30A takeoff uses #10 + materials engine", () => {
       ctype: "receptacle",
       voltage: 120,
       breaker_amps: 30,
+      entry_device_id: null,
       created_at: "",
     };
     const devices: Device[] = [

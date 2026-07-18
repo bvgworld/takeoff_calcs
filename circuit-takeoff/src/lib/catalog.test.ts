@@ -53,6 +53,7 @@ describe("catalog assemblies in takeoff", () => {
       ctype: "receptacle",
       voltage: 120,
       breaker_amps: 20,
+      entry_device_id: null,
       created_at: "",
     };
     const devices: Device[] = [

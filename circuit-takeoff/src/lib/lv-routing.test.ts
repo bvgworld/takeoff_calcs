@@ -105,6 +105,7 @@ describe("dimming follow", () => {
       ctype: "lighting",
       voltage: 277,
       breaker_amps: 20,
+      entry_device_id: null,
       created_at: "",
     };
     const devices: Device[] = [
