@@ -989,7 +989,7 @@ export function SheetViewer({
           <>
             <span className="h-4 w-px bg-perry-silver" />
             <span className="text-xs font-semibold text-perry-industrial">
-              {formatScaleBadge(ftPerPx)}
+              {formatScaleBadge(ftPerPx, renderDpi)}
             </span>
           </>
         )}

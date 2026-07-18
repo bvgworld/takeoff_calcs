@@ -5,12 +5,13 @@
  * stored ft_per_px via pxToFt (or planLengthFt → pxToFt). Only the
  * calibrate dialog may read render_dpi / scale presets to WRITE ft_per_px.
  *
- * Raster assumed ~150 DPI for architectural-scale approximation when
- * nearestArchScale has no stored render_dpi (legacy sheets).
+ * Architectural-scale badge approximation uses sheet.render_dpi when
+ * present; legacy sheets fall back to 150 DPI.
  * New uploads store actual render_dpi (300 target, 12000px cap).
  */
 
-const ASSUMED_DPI = 150;
+/** Fallback DPI for nearestArchScale when sheet.render_dpi is null. */
+export const FALLBACK_RENDER_DPI = 150;
 
 /** Warn when two-point reference span is shorter than this (image px). */
 export const SHORT_BASELINE_PX = 150;
@@ -130,10 +131,21 @@ export function formatFtIn(ft: number): string {
   return `${sign}${whole}'-${inches}"`;
 }
 
-export function nearestArchScale(ftPerPx: number): string {
+/**
+ * Nearest architectural scale label for a ft_per_px value.
+ * @param renderDpi sheet.render_dpi, or omit/null to use FALLBACK_RENDER_DPI (150).
+ */
+export function nearestArchScale(
+  ftPerPx: number,
+  renderDpi?: number | null
+): string {
   if (!ftPerPx || ftPerPx <= 0) return "—";
-  // inches on paper per real foot, at assumed raster DPI
-  const inchPerFt = 1 / (ftPerPx * ASSUMED_DPI);
+  const dpi =
+    typeof renderDpi === "number" && renderDpi > 0
+      ? renderDpi
+      : FALLBACK_RENDER_DPI;
+  // inches on paper per real foot, at the sheet's raster DPI
+  const inchPerFt = 1 / (ftPerPx * dpi);
   let best = ARCH_SCALES[0];
   let bestErr = Infinity;
   for (const s of ARCH_SCALES) {
@@ -146,9 +158,12 @@ export function nearestArchScale(ftPerPx: number): string {
   return best.label;
 }
 
-export function formatScaleBadge(ftPerPx: number): string {
+export function formatScaleBadge(
+  ftPerPx: number,
+  renderDpi?: number | null
+): string {
   const px = ftPerPx >= 0.01 ? ftPerPx.toFixed(3) : ftPerPx.toFixed(5);
-  return `Scale: 1px = ${px} ft (≈${nearestArchScale(ftPerPx)})`;
+  return `Scale: 1px = ${px} ft (≈${nearestArchScale(ftPerPx, renderDpi)})`;
 }
 
 export function isCalibrated(ftPerPx: number | null | undefined): boolean {

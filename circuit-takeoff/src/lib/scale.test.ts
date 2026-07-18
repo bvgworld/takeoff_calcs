@@ -6,6 +6,7 @@ import {
   ftPerPxFromPreset,
   ftPerPxFromTwoPoint,
   isShortBaseline,
+  nearestArchScale,
   pxToFt,
   scaleMismatchPct,
 } from "./scale";
@@ -153,5 +154,14 @@ describe("px→ft single source of truth", () => {
     expect(isShortBaseline(SHORT_BASELINE_PX)).toBe(false);
     expect(scaleMismatchPct(0.1, 0.1)).toBeCloseTo(0, 5);
     expect(scaleMismatchPct(0.12, 0.1)).toBeCloseTo(20, 5);
+  });
+});
+
+describe("nearestArchScale", () => {
+  it("ftPerPx = 8/300 at renderDpi 300 → 1/8\", not 1/4\"", () => {
+    const ftPerPx = 8 / 300;
+    expect(nearestArchScale(ftPerPx, 300)).toBe('1/8" = 1\'-0"');
+    // Wrong DPI (legacy 150) would mis-label this as ~1/4"
+    expect(nearestArchScale(ftPerPx, 150)).toBe('1/4" = 1\'-0"');
   });
 });
