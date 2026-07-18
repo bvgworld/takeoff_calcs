@@ -25,6 +25,18 @@ export type TakeoffLine = {
   qty: number;
   uom: string;
   notes: string;
+  /** Sheet metadata tags (plan sets). Absent on project-wide lines. */
+  level?: string;
+  discipline?: string;
+  sheet?: string;
+};
+
+/** Sheet metadata used to tag takeoff lines for grouping/CSV. */
+export type TakeoffSheetMeta = {
+  id: string;
+  name: string;
+  discipline: string;
+  level: string;
 };
 
 export type PipeShareInfo = {
@@ -365,10 +377,23 @@ export function buildProjectTakeoff(opts: {
   settings: ProjectSettings;
   /** Image scale (ft/px) keyed by sheet_id — required for HR clustering. */
   ftPerPxBySheetId: Map<string, number> | Record<string, number>;
+  /** Optional sheet metadata — tags lines with level/discipline/sheet. */
+  sheets?: TakeoffSheetMeta[];
 }): { lines: TakeoffLine[]; totals: TakeoffLine[] } {
   const { circuits, devices, routes } = opts;
   const settings = mergeSettings(opts.settings);
   const ftPerPxBySheetId = toFtPerPxMap(opts.ftPerPxBySheetId);
+  const sheetMeta = new Map((opts.sheets || []).map((s) => [s.id, s]));
+  const tag = (line: TakeoffLine, sheetId: string | null): TakeoffLine => {
+    const m = sheetId ? sheetMeta.get(sheetId) : undefined;
+    if (!m) return line;
+    return {
+      ...line,
+      level: m.level,
+      discipline: m.discipline,
+      sheet: m.name,
+    };
+  };
   const byCkt = new Map<string, Route[]>();
   for (const r of routes) {
     if (!r.circuit_id) continue;
@@ -389,7 +414,7 @@ export function buildProjectTakeoff(opts: {
       pipeGroupSize: pipe?.groupSize ?? 1,
       ownsPipe: pipe?.ownsPipe ?? true,
       maxHrPlanFt: pipe?.maxHrPlanFt,
-    });
+    }).map((l) => tag(l, c.sheet_id));
   });
 
   const lvLines = buildLvTakeoff({
@@ -400,41 +425,56 @@ export function buildProjectTakeoff(opts: {
   }) as TakeoffLine[];
 
   // Unassigned J-boxes — assemblies not covered by any circuit takeoff.
-  const unassignedJboxes = devices.filter(
-    (d) => d.type === "jbox" && !d.circuit_id
-  );
+  // Rolled up per sheet so plan-set tags stay accurate.
   const unassignedJboxLines: TakeoffLine[] = [];
-  const unassignedRolled = new Map<
-    string,
-    { qty: number; notes: string; uom: string }
-  >();
-  for (const d of unassignedJboxes) {
-    const entry = getCatalogEntry(resolveCatalogId(d));
-    if (!entry) continue;
-    for (const line of entry.assembly) {
-      const key = `${line.item}|${line.uom}`;
-      const cur = unassignedRolled.get(key) || {
-        qty: 0,
-        notes: entry.label,
-        uom: line.uom,
-      };
-      cur.qty += line.qty;
-      unassignedRolled.set(key, cur);
-    }
+  const unassignedBySheet = new Map<string, Device[]>();
+  for (const d of devices) {
+    if (d.type !== "jbox" || d.circuit_id) continue;
+    const list = unassignedBySheet.get(d.sheet_id) || [];
+    list.push(d);
+    unassignedBySheet.set(d.sheet_id, list);
   }
-  Array.from(unassignedRolled.entries()).forEach(([key, v]) => {
-    const [item] = key.split("|");
-    unassignedJboxLines.push({
-      circuit: "Unassigned J-boxes",
-      item,
-      qty: v.qty,
-      uom: v.uom,
-      notes: v.notes,
+  unassignedBySheet.forEach((jboxes, sheetId) => {
+    const rolled = new Map<string, { qty: number; notes: string; uom: string }>();
+    for (const d of jboxes) {
+      const entry = getCatalogEntry(resolveCatalogId(d));
+      if (!entry) continue;
+      for (const line of entry.assembly) {
+        const key = `${line.item}|${line.uom}`;
+        const cur = rolled.get(key) || {
+          qty: 0,
+          notes: entry.label,
+          uom: line.uom,
+        };
+        cur.qty += line.qty;
+        rolled.set(key, cur);
+      }
+    }
+    Array.from(rolled.entries()).forEach(([key, v]) => {
+      const [item] = key.split("|");
+      unassignedJboxLines.push(
+        tag(
+          {
+            circuit: "Unassigned J-boxes",
+            item,
+            qty: v.qty,
+            uom: v.uom,
+            notes: v.notes,
+          },
+          sheetId
+        )
+      );
     });
   });
 
   const lines = [...powerLines, ...lvLines, ...unassignedJboxLines];
+  const totals = rollupTakeoffTotals(lines);
 
+  return { lines, totals };
+}
+
+/** Roll lines up by item|uom into TOTAL rows (grand total when unfiltered). */
+export function rollupTakeoffTotals(lines: TakeoffLine[]): TakeoffLine[] {
   const map = new Map<string, TakeoffLine>();
   for (const l of lines) {
     if (l.qty === 0) continue;
@@ -452,18 +492,42 @@ export function buildProjectTakeoff(opts: {
       });
     }
   }
-  const totals = Array.from(map.values()).sort((a, b) =>
+  return Array.from(map.values()).sort((a, b) =>
     a.item.localeCompare(b.item)
   );
+}
 
-  return { lines, totals };
+export type TakeoffFilter =
+  | { kind: "all" }
+  | { kind: "discipline"; discipline: string }
+  | { kind: "level"; level: string };
+
+/** Filter lines by sheet tag. Untagged lines match "" (project-wide). */
+export function filterTakeoffLines(
+  lines: TakeoffLine[],
+  filter: TakeoffFilter
+): TakeoffLine[] {
+  if (filter.kind === "all") return lines;
+  if (filter.kind === "discipline") {
+    return lines.filter((l) => (l.discipline ?? "") === filter.discipline);
+  }
+  return lines.filter((l) => (l.level ?? "") === filter.level);
 }
 
 export function takeoffToCsv(lines: TakeoffLine[]): string {
-  const header = "circuit,item,qty,uom,notes";
+  const header = "level,discipline,sheet,circuit,item,qty,uom,notes";
   const body = lines
     .map((l) =>
-      [l.circuit, l.item, l.qty, l.uom, l.notes]
+      [
+        l.level ?? "",
+        l.discipline ?? "",
+        l.sheet ?? "",
+        l.circuit,
+        l.item,
+        l.qty,
+        l.uom,
+        l.notes,
+      ]
         .map((c) => `"${String(c).replace(/"/g, '""')}"`)
         .join(",")
     )

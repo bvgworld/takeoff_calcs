@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { AppNav } from "@/components/auth/AppNav";
 import { ExportCsvButton } from "@/components/takeoff/ExportCsvButton";
+import { TakeoffView } from "@/components/takeoff/TakeoffView";
 import { buildProjectTakeoff } from "@/lib/takeoff";
 import type {
   Circuit,
@@ -55,11 +56,13 @@ export default async function TakeoffPage({
 
   const { data: sheets } = await supabase
     .from("sheets")
-    .select("id,name,ft_per_px")
+    .select("id,name,ft_per_px,discipline,level")
     .eq("project_id", params.id);
 
   const sheetList =
-    (sheets as Pick<Sheet, "id" | "name" | "ft_per_px">[] | null) || [];
+    (sheets as
+      | Pick<Sheet, "id" | "name" | "ft_per_px" | "discipline" | "level">[]
+      | null) || [];
   const sheetIds = sheetList.map((s) => s.id);
   const ftPerPxBySheetId: Record<string, number> = {};
   for (const s of sheetList) {
@@ -109,14 +112,13 @@ export default async function TakeoffPage({
     routes,
     settings,
     ftPerPxBySheetId,
+    sheets: sheetList.map((s) => ({
+      id: s.id,
+      name: s.name,
+      discipline: s.discipline ?? "power",
+      level: s.level ?? "",
+    })),
   });
-
-  const byCircuit = new Map<string, typeof lines>();
-  for (const line of lines) {
-    const list = byCircuit.get(line.circuit) || [];
-    list.push(line);
-    byCircuit.set(line.circuit, list);
-  }
 
   const csvRows = [...lines, ...totals];
   const safeName = p.name.replace(/[^\w.-]+/g, "_").slice(0, 48);
@@ -167,103 +169,7 @@ export default async function TakeoffPage({
             </Link>
           </div>
         ) : (
-          <div className="mt-8 space-y-8">
-            {Array.from(byCircuit.entries()).map(([ckt, rows]) => (
-              <section key={ckt}>
-                <h2 className="mb-2 font-display text-lg text-perry-industrial">
-                  {ckt}
-                </h2>
-                <div className="overflow-x-auto rounded-lg border border-perry-silver bg-white">
-                  <table className="w-full text-left text-sm">
-                    <thead className="border-b border-perry-silver bg-perry-white text-xs uppercase tracking-wide text-gray-500">
-                      <tr>
-                        <th className="px-3 py-2 font-semibold">Item</th>
-                        <th className="px-3 py-2 text-right font-semibold">
-                          Qty
-                        </th>
-                        <th className="px-3 py-2 font-semibold">UOM</th>
-                        <th className="px-3 py-2 font-semibold">Circuit</th>
-                        <th className="px-3 py-2 font-semibold">Notes</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rows.map((r, i) => (
-                        <tr
-                          key={`${r.item}-${i}`}
-                          className="border-b border-perry-silver/60 last:border-0"
-                        >
-                          <td className="px-3 py-2 font-medium text-perry-industrial">
-                            {r.item}
-                          </td>
-                          <td className="px-3 py-2 text-right tabular-nums">
-                            {r.qty}
-                          </td>
-                          <td className="px-3 py-2 text-gray-600">{r.uom}</td>
-                          <td className="px-3 py-2 text-gray-600">
-                            {r.circuit}
-                          </td>
-                          <td className="px-3 py-2 text-xs text-gray-500">
-                            {r.notes}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
-            ))}
-
-            <section>
-              <h2 className="mb-2 font-display text-lg text-perry-industrial">
-                Project totals
-              </h2>
-              <div className="overflow-x-auto rounded-lg border border-perry-silver bg-white">
-                <table className="w-full text-left text-sm">
-                  <thead className="border-b border-perry-silver bg-perry-white text-xs uppercase tracking-wide text-gray-500">
-                    <tr>
-                      <th className="px-3 py-2 font-semibold">Item</th>
-                      <th className="px-3 py-2 text-right font-semibold">
-                        Qty
-                      </th>
-                      <th className="px-3 py-2 font-semibold">UOM</th>
-                      <th className="px-3 py-2 font-semibold">Circuit</th>
-                      <th className="px-3 py-2 font-semibold">Notes</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {totals.map((r, i) => (
-                      <tr
-                        key={`total-${r.item}-${i}`}
-                        className="border-b border-perry-silver/60 last:border-0"
-                      >
-                        <td className="px-3 py-2 font-medium text-perry-industrial">
-                          {r.item}
-                        </td>
-                        <td className="px-3 py-2 text-right tabular-nums font-semibold">
-                          {r.qty}
-                        </td>
-                        <td className="px-3 py-2 text-gray-600">{r.uom}</td>
-                        <td className="px-3 py-2 text-gray-600">TOTAL</td>
-                        <td className="px-3 py-2 text-xs text-gray-500">
-                          {r.notes}
-                        </td>
-                      </tr>
-                    ))}
-                    {!totals.length && (
-                      <tr>
-                        <td
-                          colSpan={5}
-                          className="px-3 py-8 text-center text-sm text-gray-500"
-                        >
-                          No material quantities yet (route circuits first).
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          </div>
+          <TakeoffView lines={lines} grandTotals={totals} />
         )}
       </main>
     </div>

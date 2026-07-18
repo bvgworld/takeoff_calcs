@@ -37,6 +37,19 @@ export type Project = {
   created_at: string;
 };
 
+/** Sheet discipline — metadata that drives grouping, takeoff sections, CSV. */
+export const DISCIPLINES = [
+  "lighting",
+  "power",
+  "fire",
+  "data",
+  "demo",
+  "site",
+  "other",
+] as const;
+
+export type Discipline = (typeof DISCIPLINES)[number];
+
 export type Sheet = {
   id: string;
   project_id: string;
@@ -52,6 +65,14 @@ export type Sheet = {
   render_dpi?: number | null;
   /** 1-based PDF page that was rasterized (sharp-zoom overlay). */
   pdf_page?: number;
+  discipline: Discipline;
+  /** Building level, e.g. 'Level 1', 'Basement'. Empty = unset. */
+  level: string;
+  /** 1-based page in the shared source plan-set PDF. */
+  page_number?: number | null;
+  /** Storage path of the shared plan-set PDF (one per upload). */
+  source_pdf_path?: string | null;
+  sort_order: number;
   created_at: string;
 };
 

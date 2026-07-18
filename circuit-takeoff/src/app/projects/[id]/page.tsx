@@ -3,7 +3,8 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { ProjectSettingsForm } from "@/components/projects/ProjectSettingsForm";
-import { UploadSheetForm } from "@/components/projects/UploadSheetForm";
+import { UploadPlanSetForm } from "@/components/projects/UploadPlanSetForm";
+import { SheetIndex, type SheetCard } from "@/components/projects/SheetIndex";
 import { AppNav } from "@/components/auth/AppNav";
 import type { Project, ProjectSettings, Sheet } from "@/lib/types";
 
@@ -44,9 +45,49 @@ export default async function ProjectPage({
     .from("sheets")
     .select("*")
     .eq("project_id", params.id)
+    .order("sort_order", { ascending: true })
     .order("created_at", { ascending: true });
 
   const p = project as Project;
+  const sheetRows = (sheets as Sheet[] | null) || [];
+
+  // Thumbnails (signed raster URLs) + device counts per sheet.
+  const { data: signed } = sheetRows.length
+    ? await supabase.storage
+        .from("plans")
+        .createSignedUrls(
+          sheetRows.map((s) => s.image_path),
+          3600
+        )
+    : { data: null };
+  const signedByPath = new Map(
+    (signed || [])
+      .filter((x) => x.signedUrl && !x.error)
+      .map((x) => [x.path as string, x.signedUrl])
+  );
+
+  const counts = await Promise.all(
+    sheetRows.map(async (s) => {
+      const { count } = await supabase
+        .from("devices")
+        .select("*", { count: "exact", head: true })
+        .eq("sheet_id", s.id);
+      return count ?? 0;
+    })
+  );
+
+  const cards: SheetCard[] = sheetRows.map((s, i) => ({
+    id: s.id,
+    name: s.name,
+    discipline: s.discipline ?? "power",
+    level: s.level ?? "",
+    sort_order: s.sort_order ?? i + 1,
+    ft_per_px: s.ft_per_px,
+    image_w: s.image_w,
+    image_h: s.image_h,
+    thumbUrl: signedByPath.get(s.image_path) ?? null,
+    deviceCount: counts[i],
+  }));
 
   return (
     <div className="min-h-screen bg-perry-white">
@@ -76,36 +117,9 @@ export default async function ProjectPage({
               <h2 className="font-display text-lg text-perry-industrial">
                 Sheets
               </h2>
-              <UploadSheetForm projectId={p.id} />
+              <UploadPlanSetForm projectId={p.id} />
             </div>
-            <ul className="space-y-2">
-              {(sheets as Sheet[] | null)?.map((s) => (
-                <li key={s.id}>
-                  <Link
-                    href={`/projects/${p.id}/sheets/${s.id}`}
-                    className="flex items-center justify-between rounded-lg border border-perry-silver bg-white px-4 py-3 hover:border-perry-blue"
-                  >
-                    <span className="font-semibold text-perry-industrial">
-                      {s.name}
-                    </span>
-                    <span className="text-xs text-gray-500">
-                      {s.image_w}×{s.image_h}px
-                    </span>
-                  </Link>
-                </li>
-              ))}
-              {!sheets?.length && (
-                <li className="rounded-lg border border-dashed border-perry-silver bg-white px-6 py-12 text-center">
-                  <p className="font-display text-lg text-perry-industrial">
-                    Upload your first sheet
-                  </p>
-                  <p className="mt-2 text-sm text-gray-500">
-                    Choose a PDF plan page. We&apos;ll rasterize it so you can
-                    calibrate scale, stamp devices, and route circuits.
-                  </p>
-                </li>
-              )}
-            </ul>
+            <SheetIndex projectId={p.id} sheets={cards} />
           </section>
           <aside>
             <h2 className="mb-3 font-display text-lg text-perry-industrial">

@@ -10,6 +10,8 @@ export const TARGET_DPI = 300;
 export const MAX_EDGE = 12000;
 /** Sharp-zoom tile canvas cap (per side). */
 export const SHARP_MAX_EDGE = 4096;
+/** Picker-grid thumbnail DPI. */
+export const THUMB_DPI = 72;
 
 async function loadPdfjs() {
   const pdfjs = await import("pdfjs-dist");
@@ -24,8 +26,16 @@ export async function getPdfPageCount(file: File): Promise<number> {
   return doc.numPages;
 }
 
-export async function rasterPdfPage(
-  file: File,
+/** Open a PDF document once for multi-page workflows (picker + rasters). */
+export async function loadPdfDocument(file: File): Promise<PDFDocumentProxy> {
+  const pdfjs = await loadPdfjs();
+  const data = new Uint8Array(await file.arrayBuffer());
+  return pdfjs.getDocument({ data }).promise;
+}
+
+/** Raster one page of an already-open document (full-res pipeline). */
+export async function rasterPdfPageFromDoc(
+  doc: PDFDocumentProxy,
   pageNumber: number,
   dpi = TARGET_DPI
 ): Promise<{
@@ -35,9 +45,6 @@ export async function rasterPdfPage(
   /** Output pixels per PDF inch after the edge cap. */
   renderDpi: number;
 }> {
-  const pdfjs = await loadPdfjs();
-  const data = new Uint8Array(await file.arrayBuffer());
-  const doc = await pdfjs.getDocument({ data }).promise;
   const page = await doc.getPage(pageNumber);
 
   let scale = dpi / 72;
@@ -77,6 +84,43 @@ export async function rasterPdfPage(
     width: canvas.width,
     height: canvas.height,
     renderDpi,
+  };
+}
+
+export async function rasterPdfPage(
+  file: File,
+  pageNumber: number,
+  dpi = TARGET_DPI
+): Promise<{
+  blob: Blob;
+  width: number;
+  height: number;
+  renderDpi: number;
+}> {
+  const doc = await loadPdfDocument(file);
+  return rasterPdfPageFromDoc(doc, pageNumber, dpi);
+}
+
+/** Low-res page thumbnail (~72 DPI, JPEG data URL) for the picker grid. */
+export async function renderPdfThumbnail(
+  doc: PDFDocumentProxy,
+  pageNumber: number,
+  dpi = THUMB_DPI
+): Promise<{ dataUrl: string; width: number; height: number }> {
+  const page = await doc.getPage(pageNumber);
+  const viewport = page.getViewport({ scale: dpi / 72 });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.floor(viewport.width));
+  canvas.height = Math.max(1, Math.floor(viewport.height));
+  const ctx = canvas.getContext("2d", { alpha: false });
+  if (!ctx) throw new Error("Could not get canvas context");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, canvas, viewport }).promise;
+  return {
+    dataUrl: canvas.toDataURL("image/jpeg", 0.75),
+    width: canvas.width,
+    height: canvas.height,
   };
 }
 
