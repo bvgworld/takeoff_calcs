@@ -2,10 +2,37 @@
 
 import { memo } from "react";
 import { Group, Rect, Circle, Line, RegularPolygon, Text } from "react-konva";
+import type Konva from "konva";
 import type { Device } from "@/lib/types";
 import { fixtureSizePx, resolveCatalogId } from "@/lib/devices";
 import { getCatalogEntry } from "@/lib/catalog";
 import { pointerInParentLocal } from "@/lib/konva-coords";
+
+/**
+ * Dev-only, once: verify the drag target is the OUTER device Group.
+ * Konva fires drag events on the draggable node itself, so inner children
+ * (inverse-scale Group, Rect body, Text label) can never be the drag
+ * target — this assert documents and guards that invariant.
+ */
+let dragChainLogged = false;
+function assertDragTargetOnce(node: Konva.Node) {
+  if (process.env.NODE_ENV === "production" || dragChainLogged) return;
+  dragChainLogged = true;
+  const chain: string[] = [];
+  let n: Konva.Node | null = node;
+  while (n) {
+    chain.push(`${n.getClassName()}${n.name() ? `(${n.name()})` : ""}`);
+    n = n.getParent();
+  }
+  // eslint-disable-next-line no-console
+  console.info("[DeviceShape] drag target chain:", chain.join(" → "));
+  console.assert(
+    node.getClassName() === "Group" && node.name() === "device",
+    "[DeviceShape] drag target is not the outer device Group:",
+    node.getClassName(),
+    node.name()
+  );
+}
 
 type Props = {
   device: Device;
@@ -281,6 +308,7 @@ function DeviceShapeInner({
   return (
     // Outer group: image-space position only — this node is draggable.
     <Group
+      name="device"
       x={device.x}
       y={device.y}
       draggable={listening && selected}
@@ -296,13 +324,17 @@ function DeviceShapeInner({
       }}
       onDragStart={(e) => {
         e.cancelBubble = true;
+        assertDragTargetOnce(e.target);
         const stage = e.target.getStage();
         if (stage) {
           e.target.setAttr("_stageWasDraggable", stage.draggable());
           stage.draggable(false);
         }
+        // Grab offset: position minus pointer, so the device does NOT
+        // jump its center to the cursor on dragstart.
         const local = pointerInParentLocal(e.target);
-        if (local) e.target.position(local);
+        e.target.setAttr("_gx", local ? e.target.x() - local.x : 0);
+        e.target.setAttr("_gy", local ? e.target.y() - local.y : 0);
         e.target.setAttr("_ox", e.target.x());
         e.target.setAttr("_oy", e.target.y());
         onDragStart?.();
@@ -310,7 +342,12 @@ function DeviceShapeInner({
       onDragMove={(e) => {
         e.cancelBubble = true;
         const local = pointerInParentLocal(e.target);
-        if (local) e.target.position(local);
+        if (local) {
+          e.target.position({
+            x: local.x + ((e.target.getAttr("_gx") as number) || 0),
+            y: local.y + ((e.target.getAttr("_gy") as number) || 0),
+          });
+        }
         const ox = e.target.getAttr("_ox") as number;
         const oy = e.target.getAttr("_oy") as number;
         const x = e.target.x();
@@ -327,7 +364,12 @@ function DeviceShapeInner({
           stage.draggable(was === true);
         }
         const local = pointerInParentLocal(e.target);
-        if (local) e.target.position(local);
+        if (local) {
+          e.target.position({
+            x: local.x + ((e.target.getAttr("_gx") as number) || 0),
+            y: local.y + ((e.target.getAttr("_gy") as number) || 0),
+          });
+        }
         onDragEnd(e.target.x(), e.target.y());
       }}
     >

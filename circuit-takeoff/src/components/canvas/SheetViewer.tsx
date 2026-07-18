@@ -48,6 +48,10 @@ import {
   routeCircuit,
 } from "@/lib/routing";
 import {
+  createRoutePersister,
+  type RoutePersister,
+} from "@/lib/route-persist";
+import {
   dataRouteReady,
   findDataDrops,
   findFacp,
@@ -148,8 +152,24 @@ export function SheetViewer({
   const moveBeforeRef = useRef<{ id: string; x: number; y: number }[] | null>(
     null
   );
-  const pendingRouteIds = useRef<Set<string>>(new Set());
   const routesRef = useRef<Route[]>([]);
+  const showErrorRef = useRef<typeof showError>(showError);
+  const routePersister = useRef<RoutePersister | null>(null);
+  if (!routePersister.current) {
+    routePersister.current = createRoutePersister({
+      debounceMs: DRAG_DEBOUNCE_MS,
+      getRoute: (id) => routesRef.current.find((r) => r.id === id),
+      write: async (id, fields) => {
+        const supabase = createClient();
+        const { error } = await supabase
+          .from("routes")
+          .update(fields)
+          .eq("id", id);
+        return { error };
+      },
+      onError: (message, retry) => showErrorRef.current(message, retry),
+    });
+  }
 
   const [tool, setTool] = useState<Tool>("select");
   const [lastCatalogId, setLastCatalogId] = useState("recep-duplex-20");
@@ -187,7 +207,6 @@ export function SheetViewer({
     current: Point;
   } | null>(null);
   const lassoRef = useRef<{ start: Point; active: boolean } | null>(null);
-  const routePersistTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const calibrated = isCalibrated(ftPerPx);
   const pointing = tool === "calibrate" || tool === "measure";
@@ -444,28 +463,18 @@ export function SheetViewer({
   }
 
   routesRef.current = routes;
+  showErrorRef.current = showError;
 
-  function scheduleRoutesPersist() {
-    if (routePersistTimer.current) clearTimeout(routePersistTimer.current);
-    routePersistTimer.current = setTimeout(() => {
-      const ids = Array.from(pendingRouteIds.current);
-      pendingRouteIds.current.clear();
-      if (!ids.length) return;
-      const snap = routesRef.current;
-      const supabase = createClient();
-      for (const id of ids) {
-        const r = snap.find((x) => x.id === id);
-        if (!r) continue;
-        void supabase
-          .from("routes")
-          .update({
-            path: r.path,
-            plan_length_ft: r.plan_length_ft,
-          })
-          .eq("id", id);
-      }
-    }, DRAG_DEBOUNCE_MS);
-  }
+  // Flush pending route writes when leaving the sheet (SPA nav unmount)
+  // or when the page is hidden/closed (best effort).
+  useEffect(() => {
+    const flush = () => routePersister.current?.flush();
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      flush();
+    };
+  }, []);
 
   async function performUndo() {
     const action = undoRef.current;
@@ -1172,27 +1181,29 @@ export function SheetViewer({
                       })
                     );
                     if (ftPerPx && moves.length) {
-                      setRoutes((prev) => {
-                        let next = prev;
-                        for (const m of moves) {
-                          const glued = glueRoutesToMovedDevice(
-                            next,
-                            m.from,
-                            m.to,
-                            ftPerPx
-                          );
-                          for (let i = 0; i < glued.length; i++) {
-                            if (glued[i] !== next[i]) {
-                              pendingRouteIds.current.add(glued[i].id);
-                            }
+                      let next = routesRef.current;
+                      const changedIds = new Set<string>();
+                      for (const m of moves) {
+                        const glued = glueRoutesToMovedDevice(
+                          next,
+                          m.from,
+                          m.to,
+                          ftPerPx
+                        );
+                        for (let i = 0; i < glued.length; i++) {
+                          if (glued[i] !== next[i]) {
+                            changedIds.add(glued[i].id);
                           }
-                          next = glued;
                         }
-                        if (pendingRouteIds.current.size) {
-                          scheduleRoutesPersist();
-                        }
-                        return next;
-                      });
+                        next = glued;
+                      }
+                      if (changedIds.size) {
+                        routesRef.current = next;
+                        setRoutes(next);
+                        changedIds.forEach((id) =>
+                          routePersister.current?.queue(id)
+                        );
+                      }
                     }
                   }}
                   onDragEnd={(x, y) => {
@@ -1232,32 +1243,19 @@ export function SheetViewer({
                   editEnabled={tool === "select" || editRoutes}
                   onSelectRoute={setSelectedRouteId}
                   onPathChange={(routeId, path, planFt, userEdited) => {
-                    setRoutes((prev) =>
-                      prev.map((r) =>
-                        r.id === routeId
-                          ? {
-                              ...r,
-                              path: path as GeoPoint[],
-                              plan_length_ft: planFt,
-                              user_edited: userEdited,
-                            }
-                          : r
-                      )
+                    const next = routesRef.current.map((r) =>
+                      r.id === routeId
+                        ? {
+                            ...r,
+                            path: path as GeoPoint[],
+                            plan_length_ft: planFt,
+                            user_edited: userEdited,
+                          }
+                        : r
                     );
-                    if (routePersistTimer.current) {
-                      clearTimeout(routePersistTimer.current);
-                    }
-                    routePersistTimer.current = setTimeout(() => {
-                      const supabase = createClient();
-                      void supabase
-                        .from("routes")
-                        .update({
-                          path,
-                          plan_length_ft: planFt,
-                          user_edited: userEdited,
-                        })
-                        .eq("id", routeId);
-                    }, 150);
+                    routesRef.current = next;
+                    setRoutes(next);
+                    routePersister.current?.queue(routeId);
                   }}
                 />
               )}
