@@ -25,6 +25,7 @@ import { createClient } from "@/lib/supabase/client";
 import {
   formatFtIn,
   formatScaleBadge,
+  ftPerPxFromTwoPoint,
   isCalibrated,
   pxToFt,
 } from "@/lib/scale";
@@ -40,7 +41,11 @@ import {
 } from "@/lib/devices";
 import { StampPicker } from "./StampPicker";
 import { pointerInNodeLocal } from "@/lib/konva-coords";
-import { glueRoutesToMovedDevice, routeCircuit } from "@/lib/routing";
+import {
+  glueRoutesToMovedDevice,
+  recomputeRoutePlanLengths,
+  routeCircuit,
+} from "@/lib/routing";
 import {
   dataRouteReady,
   findDataDrops,
@@ -156,10 +161,10 @@ export function SheetViewer({
   const [calibrateDialogOpen, setCalibrateDialogOpen] = useState(false);
   const [p1, setP1] = useState<Point | null>(null);
   const [cursor, setCursor] = useState<Point | null>(null);
+  /** Endpoints only — feet derived from current ftPerPx (never cached). */
   const [measureResult, setMeasureResult] = useState<{
     a: Point;
     b: Point;
-    ft: number;
   } | null>(null);
   const [calibratePending, setCalibratePending] = useState<{
     a: Point;
@@ -703,8 +708,8 @@ export function SheetViewer({
         if (tool === "measure") setMeasureResult(null);
         return;
       }
-      const px = Math.hypot(pt.x - p1.x, pt.y - p1.y);
       if (tool === "calibrate") {
+        const px = Math.hypot(pt.x - p1.x, pt.y - p1.y);
         setCalibratePending({ a: p1, b: pt, px });
         setP1(null);
         setCursor(null);
@@ -716,7 +721,7 @@ export function SheetViewer({
         setCursor(null);
         return;
       }
-      setMeasureResult({ a: p1, b: pt, ft: pxToFt(px, ftPerPx) });
+      setMeasureResult({ a: p1, b: pt });
       setP1(null);
       setCursor(null);
       return;
@@ -781,42 +786,52 @@ export function SheetViewer({
     }
   }
 
-  async function saveCalibration(feet: number) {
-    if (!calibratePending || calibratePending.px < 1) return;
-    const next = feet / calibratePending.px;
+  /**
+   * Persist sheet ft_per_px, sync in-memory scale, and recompute every
+   * route's plan_length_ft from stored px paths × the new scale.
+   */
+  async function applySheetScale(next: number) {
+    if (!(next > 0) || !Number.isFinite(next)) return;
     setSaving(true);
     const supabase = createClient();
     const { error } = await supabase
       .from("sheets")
       .update({ ft_per_px: next })
       .eq("id", sheetId);
-    setSaving(false);
     if (error) {
-      showError(error.message, () => void saveCalibration(feet));
+      setSaving(false);
+      showError(error.message, () => void applySheetScale(next));
       return;
     }
+
+    const updated = recomputeRoutePlanLengths(routesRef.current, next);
     setFtPerPx(next);
+    setRoutes(updated);
+    routesRef.current = updated;
+    setMeasureResult(null);
     setCalibratePending(null);
     setCalibrateDialogOpen(false);
     selectTool("select");
+
+    await Promise.all(
+      updated.map((r) =>
+        supabase
+          .from("routes")
+          .update({ plan_length_ft: r.plan_length_ft })
+          .eq("id", r.id)
+      )
+    );
+    setSaving(false);
+  }
+
+  async function saveCalibration(feet: number) {
+    if (!calibratePending || calibratePending.px < 1) return;
+    const next = ftPerPxFromTwoPoint(feet, calibratePending.px);
+    await applySheetScale(next);
   }
 
   async function savePresetScale(next: number) {
-    setSaving(true);
-    const supabase = createClient();
-    const { error } = await supabase
-      .from("sheets")
-      .update({ ft_per_px: next })
-      .eq("id", sheetId);
-    setSaving(false);
-    if (error) {
-      showError(error.message, () => void savePresetScale(next));
-      return;
-    }
-    setFtPerPx(next);
-    setCalibratePending(null);
-    setCalibrateDialogOpen(false);
-    selectTool("select");
+    await applySheetScale(next);
   }
 
   const liveLine =
@@ -837,6 +852,17 @@ export function SheetViewer({
         y: (measureResult.a.y + measureResult.b.y) / 2,
       }
     : null;
+
+  const measureFt =
+    measureResult && ftPerPx != null
+      ? pxToFt(
+          Math.hypot(
+            measureResult.b.x - measureResult.a.x,
+            measureResult.b.y - measureResult.a.y
+          ),
+          ftPerPx
+        )
+      : null;
 
   const lassoRect = lasso
     ? {
@@ -1277,11 +1303,11 @@ export function SheetViewer({
                   />
                 </>
               )}
-              {measureLabelPos && measureResult && (
+              {measureLabelPos && measureFt != null && (
                 <Text
                   x={measureLabelPos.x}
                   y={measureLabelPos.y - 18 / scale}
-                  text={`${formatFtIn(measureResult.ft)}  (${measureResult.ft.toFixed(2)} ft)`}
+                  text={`${formatFtIn(measureFt)}  (${measureFt.toFixed(2)} ft)`}
                   fontSize={14 / scale}
                   fontFamily="Poppins, sans-serif"
                   fontStyle="bold"
@@ -1715,6 +1741,7 @@ export function SheetViewer({
         <CalibrateDialog
           pixelDistance={calibratePending?.px ?? null}
           renderDpi={renderDpi}
+          currentFtPerPx={ftPerPx}
           onCancel={() => {
             if (saving) return;
             setCalibratePending(null);

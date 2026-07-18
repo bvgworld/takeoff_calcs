@@ -4,7 +4,11 @@ import { FormEvent, useState } from "react";
 import {
   ARCH_SCALE_PRESETS,
   ENG_SCALE_PRESETS,
+  SHORT_BASELINE_PX,
+  SCALE_MISMATCH_WARN_PCT,
   ftPerPxFromPreset,
+  isShortBaseline,
+  scaleMismatchPct,
   parseDistanceFt,
   type ScalePreset,
 } from "@/lib/scale";
@@ -14,6 +18,8 @@ type Props = {
   /** Null when opening for presets / before two points are picked. */
   pixelDistance: number | null;
   renderDpi: number | null;
+  /** Current sheet ft_per_px (for preset-vs-current mismatch note). */
+  currentFtPerPx: number | null;
   onCancel: () => void;
   onConfirmTwoPoint: (feet: number) => void;
   onConfirmPreset: (ftPerPx: number) => void;
@@ -23,6 +29,7 @@ type Props = {
 export function CalibrateDialog({
   pixelDistance,
   renderDpi,
+  currentFtPerPx,
   onCancel,
   onConfirmTwoPoint,
   onConfirmPreset,
@@ -43,6 +50,23 @@ export function CalibrateDialog({
   function selectedPreset(): ScalePreset | undefined {
     return allPresets.find((p) => `${p.kind}:${p.label}` === presetKey);
   }
+
+  let presetFtPerPx: number | null = null;
+  if (renderDpi != null && renderDpi > 0) {
+    const preset = selectedPreset();
+    if (preset) {
+      try {
+        presetFtPerPx = ftPerPxFromPreset(preset, renderDpi);
+      } catch {
+        presetFtPerPx = null;
+      }
+    }
+  }
+
+  const mismatchPct =
+    presetFtPerPx != null && currentFtPerPx != null
+      ? scaleMismatchPct(presetFtPerPx, currentFtPerPx)
+      : null;
 
   function onSubmitTwoPoint(e: FormEvent) {
     e.preventDefault();
@@ -77,6 +101,7 @@ export function CalibrateDialog({
   }
 
   const presetsEnabled = renderDpi != null && renderDpi > 0;
+  const shortBaseline = isShortBaseline(pixelDistance);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-perry-industrial/40 p-4">
@@ -139,6 +164,13 @@ export function CalibrateDialog({
                   Real-world distance between these points (
                   {Math.round(pixelDistance)} px apart).
                 </p>
+                {shortBaseline && (
+                  <p className="text-[11px] leading-snug text-amber-800">
+                    Short baseline ({Math.round(pixelDistance)} px &lt;{" "}
+                    {SHORT_BASELINE_PX} px) — small click error becomes large
+                    scale error. Prefer a longer known dimension when possible.
+                  </p>
+                )}
                 <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500">
                   Distance (ft-in or decimal ft)
                   <input
@@ -200,6 +232,15 @@ export function CalibrateDialog({
                   Half-size sets are common — verify with the Measure tool
                   against a known dimension.
                 </p>
+                {mismatchPct != null &&
+                  mismatchPct >= SCALE_MISMATCH_WARN_PCT && (
+                    <p className="text-[11px] leading-snug text-amber-800">
+                      Selected preset differs from the current calibration by{" "}
+                      {mismatchPct.toFixed(0)}% (two-point and preset often
+                      disagree on half-size or non–true-to-size PDFs). Measure
+                      a known dimension to decide which to trust.
+                    </p>
+                  )}
               </>
             )}
             {error && <p className="text-xs text-perry-signal">{error}</p>}

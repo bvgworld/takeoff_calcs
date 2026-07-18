@@ -1,11 +1,22 @@
 /**
  * Scale helpers: parse real-world distances, format badges / measures.
+ *
+ * DISTANCE CONVERSION RULE: every px→ft conversion must use the sheet's
+ * stored ft_per_px via pxToFt (or planLengthFt → pxToFt). Only the
+ * calibrate dialog may read render_dpi / scale presets to WRITE ft_per_px.
+ *
  * Raster assumed ~150 DPI for architectural-scale approximation when
  * nearestArchScale has no stored render_dpi (legacy sheets).
  * New uploads store actual render_dpi (300 target, 12000px cap).
  */
 
 const ASSUMED_DPI = 150;
+
+/** Warn when two-point reference span is shorter than this (image px). */
+export const SHORT_BASELINE_PX = 150;
+
+/** Show preset-vs-current note when relative difference exceeds this (%). */
+export const SCALE_MISMATCH_WARN_PCT = 5;
 
 /** Paper inches per real foot (architectural). */
 export type ArchScalePreset = {
@@ -144,7 +155,35 @@ export function isCalibrated(ftPerPx: number | null | undefined): boolean {
   return typeof ftPerPx === "number" && ftPerPx > 0 && Number.isFinite(ftPerPx);
 }
 
-/** Pixel distance → feet using sheet scale. */
+/**
+ * Pixel distance → feet using the sheet's current ft_per_px.
+ * Single source of truth for all distance conversions (Measure, routes, etc.).
+ */
 export function pxToFt(px: number, ftPerPx: number): number {
   return px * ftPerPx;
+}
+
+/** Two-point calibration: real feet ÷ image-pixel span → ft_per_px. */
+export function ftPerPxFromTwoPoint(
+  feet: number,
+  pixelDistance: number
+): number {
+  if (!(feet > 0) || !(pixelDistance > 0)) {
+    throw new Error("feet and pixelDistance must be positive");
+  }
+  return feet / pixelDistance;
+}
+
+/** Absolute percent difference between two positive scales. */
+export function scaleMismatchPct(a: number, b: number): number | null {
+  if (!(a > 0) || !(b > 0)) return null;
+  return Math.abs(a / b - 1) * 100;
+}
+
+export function isShortBaseline(pixelDistance: number | null | undefined): boolean {
+  return (
+    typeof pixelDistance === "number" &&
+    pixelDistance > 0 &&
+    pixelDistance < SHORT_BASELINE_PX
+  );
 }

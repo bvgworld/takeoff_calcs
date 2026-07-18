@@ -1,3 +1,4 @@
+import { pxToFt } from "./scale";
 import type { Device, Point, ProjectSettings, Route, RouteKind } from "./types";
 
 export function manhattan(a: Point, b: Point): number {
@@ -18,8 +19,22 @@ export function polylineLengthPx(path: Point[]): number {
   return len;
 }
 
+/** Plan length in feet — always path px × sheet ft_per_px via pxToFt. */
 export function planLengthFt(path: Point[], ftPerPx: number): number {
-  return polylineLengthPx(path) * ftPerPx;
+  return pxToFt(polylineLengthPx(path), ftPerPx);
+}
+
+/**
+ * Recompute stored plan_length_ft for every route from path geometry and
+ * the sheet's current ft_per_px (after calibration / preset change).
+ */
+export function recomputeRoutePlanLengths<
+  T extends { path: Point[]; plan_length_ft: number },
+>(routes: T[], ftPerPx: number): T[] {
+  return routes.map((r) => ({
+    ...r,
+    plan_length_ft: planLengthFt(r.path, ftPerPx),
+  }));
 }
 
 export function nearPoint(a: Point, b: Point, eps = 0.75): boolean {

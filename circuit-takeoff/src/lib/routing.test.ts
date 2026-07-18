@@ -9,8 +9,10 @@ import {
   planLengthFt,
   polylineLengthPx,
   primMst,
+  recomputeRoutePlanLengths,
   routeCircuit,
 } from "./routing";
+import { pxToFt } from "./scale";
 import type { Route } from "./types";
 import type { Device, ProjectSettings } from "./types";
 import { DEFAULT_SETTINGS } from "./types";
@@ -50,11 +52,27 @@ describe("manhattan", () => {
 });
 
 describe("polyline length", () => {
-  it("computes orthogonal path length in px and ft", () => {
+  it("computes orthogonal path length in px and ft via pxToFt", () => {
     const path = orthogonalPolyline(pt(0, 0), pt(30, 40));
     expect(path).toEqual([pt(0, 0), pt(30, 0), pt(30, 40)]);
     expect(polylineLengthPx(path)).toBe(70);
     expect(planLengthFt(path, 0.1)).toBeCloseTo(7, 5);
+    expect(planLengthFt(path, 0.1)).toBe(pxToFt(polylineLengthPx(path), 0.1));
+  });
+
+  it("recomputeRoutePlanLengths updates from path × ft_per_px", () => {
+    const path = [pt(0, 0), pt(100, 0)];
+    const routes = [
+      {
+        id: "r1",
+        path,
+        plan_length_ft: 999,
+      },
+    ];
+    const out = recomputeRoutePlanLengths(routes, 0.05);
+    expect(out[0].plan_length_ft).toBeCloseTo(5, 8);
+    const out2 = recomputeRoutePlanLengths(out, 0.2);
+    expect(out2[0].plan_length_ft).toBeCloseTo(20, 8);
   });
 });
 
