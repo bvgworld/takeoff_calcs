@@ -56,6 +56,8 @@ import {
   createRoutePersister,
   type RoutePersister,
 } from "@/lib/route-persist";
+import { routeLayerInteractive } from "@/lib/canvas-gates";
+import { withWriteTimeout } from "@/lib/write-guard";
 import {
   dataRouteReady,
   findDataDrops,
@@ -166,10 +168,9 @@ export function SheetViewer({
       getRoute: (id) => routesRef.current.find((r) => r.id === id),
       write: async (id, fields) => {
         const supabase = createClient();
-        const { error } = await supabase
-          .from("routes")
-          .update(fields)
-          .eq("id", id);
+        const { error } = await withWriteTimeout(() =>
+          supabase.from("routes").update(fields).eq("id", id)
+        );
         return { error };
       },
       onError: (message, retry) => showErrorRef.current(message, retry),
@@ -496,10 +497,9 @@ export function SheetViewer({
   async function persistRotation(next: SheetRotation) {
     setRotation(next);
     const supabase = createClient();
-    const { error } = await supabase
-      .from("sheets")
-      .update({ rotation: next })
-      .eq("id", sheetId);
+    const { error } = await withWriteTimeout(() =>
+      supabase.from("sheets").update({ rotation: next }).eq("id", sheetId)
+    );
     if (error) {
       showError(error.message, () => void persistRotation(next));
     }
@@ -518,10 +518,9 @@ export function SheetViewer({
         dragTimers.current.delete(id);
         const supabase = createClient();
         void (async () => {
-          const { error } = await supabase
-            .from("devices")
-            .update({ x, y })
-            .eq("id", id);
+          const { error } = await withWriteTimeout(() =>
+            supabase.from("devices").update({ x, y }).eq("id", id)
+          );
           if (error) {
             showError(error.message, () => schedulePosPersist(id, x, y));
           }
@@ -553,10 +552,9 @@ export function SheetViewer({
     if (action.kind === "stamp") {
       setDevices((prev) => prev.filter((d) => d.id !== action.device.id));
       setSelectedIds((prev) => prev.filter((id) => id !== action.device.id));
-      const { error } = await supabase
-        .from("devices")
-        .delete()
-        .eq("id", action.device.id);
+      const { error } = await withWriteTimeout(() =>
+        supabase.from("devices").delete().eq("id", action.device.id)
+      );
       if (error) {
         setDevices((prev) => [...prev, action.device]);
         showError(error.message);
@@ -566,17 +564,19 @@ export function SheetViewer({
 
     if (action.kind === "delete") {
       setDevices((prev) => [...prev, ...action.devices]);
-      const { error } = await supabase.from("devices").insert(
-        action.devices.map((d) => ({
-          id: d.id,
-          sheet_id: d.sheet_id,
-          type: d.type,
-          catalog_id: d.catalog_id,
-          x: d.x,
-          y: d.y,
-          attrs: d.attrs,
-          circuit_id: d.circuit_id,
-        }))
+      const { error } = await withWriteTimeout(() =>
+        supabase.from("devices").insert(
+          action.devices.map((d) => ({
+            id: d.id,
+            sheet_id: d.sheet_id,
+            type: d.type,
+            catalog_id: d.catalog_id,
+            x: d.x,
+            y: d.y,
+            attrs: d.attrs,
+            circuit_id: d.circuit_id,
+          }))
+        )
       );
       if (error) {
         setDevices((prev) =>
@@ -596,10 +596,9 @@ export function SheetViewer({
         })
       );
       for (const b of action.before) {
-        const { error } = await supabase
-          .from("devices")
-          .update({ x: b.x, y: b.y })
-          .eq("id", b.id);
+        const { error } = await withWriteTimeout(() =>
+          supabase.from("devices").update({ x: b.x, y: b.y }).eq("id", b.id)
+        );
         if (error) {
           showError(error.message);
           break;
@@ -628,19 +627,21 @@ export function SheetViewer({
     setSelectedIds([id]);
 
     const supabase = createClient();
-    const { data, error } = await supabase
-      .from("devices")
-      .insert({
-        id,
-        sheet_id: sheetId,
-        type: entry.category,
-        catalog_id: entry.id,
-        x: pt.x,
-        y: pt.y,
-        attrs,
-      })
-      .select("*")
-      .single();
+    const { data, error } = await withWriteTimeout(() =>
+      supabase
+        .from("devices")
+        .insert({
+          id,
+          sheet_id: sheetId,
+          type: entry.category,
+          catalog_id: entry.id,
+          x: pt.x,
+          y: pt.y,
+          attrs,
+        })
+        .select("*")
+        .single()
+    );
     if (error) {
       setDevices((prev) => prev.filter((d) => d.id !== id));
       showError(error.message, () => void stampAt(pt));
@@ -661,7 +662,9 @@ export function SheetViewer({
     setDevices((prev) => prev.filter((d) => !ids.includes(d.id)));
     setSelectedIds([]);
     const supabase = createClient();
-    const { error } = await supabase.from("devices").delete().in("id", ids);
+    const { error } = await withWriteTimeout(() =>
+      supabase.from("devices").delete().in("id", ids)
+    );
     if (error) {
       showError(error.message, () => void deleteSelected());
       const { data } = await supabase
@@ -753,10 +756,12 @@ export function SheetViewer({
         )
       );
       const supabase = createClient();
-      const { error } = await supabase
-        .from("devices")
-        .update({ circuit_id: circuitId })
-        .in("id", targets);
+      const { error } = await withWriteTimeout(() =>
+        supabase
+          .from("devices")
+          .update({ circuit_id: circuitId })
+          .in("id", targets)
+      );
       if (error) showError(error.message, () => void run());
     };
     await run();
@@ -806,10 +811,9 @@ export function SheetViewer({
     for (const id of ids) {
       const d = devicesRef.current.find((x) => x.id === id);
       const attrs = { ...(d?.attrs || {}), ...patch };
-      const { error } = await supabase
-        .from("devices")
-        .update({ attrs })
-        .eq("id", id);
+      const { error } = await withWriteTimeout(() =>
+        supabase.from("devices").update({ attrs }).eq("id", id)
+      );
       if (error) {
         showError(error.message, () => void persistAttrs(ids, patch));
         return;
@@ -1000,10 +1004,9 @@ export function SheetViewer({
     if (!(next > 0) || !Number.isFinite(next)) return;
     setSaving(true);
     const supabase = createClient();
-    const { error } = await supabase
-      .from("sheets")
-      .update({ ft_per_px: next })
-      .eq("id", sheetId);
+    const { error } = await withWriteTimeout(() =>
+      supabase.from("sheets").update({ ft_per_px: next }).eq("id", sheetId)
+    );
     if (error) {
       setSaving(false);
       showError(error.message, () => void applySheetScale(next));
@@ -1019,14 +1022,18 @@ export function SheetViewer({
     setCalibrateDialogOpen(false);
     selectTool("select");
 
-    await Promise.all(
+    const results = await Promise.all(
       updated.map((r) =>
-        supabase
-          .from("routes")
-          .update({ plan_length_ft: r.plan_length_ft })
-          .eq("id", r.id)
+        withWriteTimeout(() =>
+          supabase
+            .from("routes")
+            .update({ plan_length_ft: r.plan_length_ft })
+            .eq("id", r.id)
+        )
       )
     );
+    const failed = results.find((r) => r.error);
+    if (failed?.error) showError(failed.error.message);
     setSaving(false);
   }
 
@@ -1471,6 +1478,13 @@ export function SheetViewer({
                 />
               ))}
               {ftPerPx && (
+                /* Non-listening unless route editing is live — the wide
+                   hitStrokeWidth on route lines must never swallow stamp
+                   or circuit-paint clicks (Konva falls through to the
+                   image when this Group doesn't listen). */
+                <Group
+                  listening={routeLayerInteractive({ editRoutes, stage })}
+                >
                 <RouteLayer
                   circuits={circuits}
                   devices={devices}
@@ -1495,6 +1509,7 @@ export function SheetViewer({
                     routePersister.current?.queue(routeId);
                   }}
                 />
+                </Group>
               )}
               {liveLine && (
                 <Line
@@ -1662,10 +1677,16 @@ export function SheetViewer({
               });
               nextNum = ckt.number + 1;
               created.push(ckt);
-              await supabase
-                .from("devices")
-                .update({ circuit_id: ckt.id })
-                .in("id", cluster.deviceIds);
+              const { error: assignErr } = await withWriteTimeout(() =>
+                supabase
+                  .from("devices")
+                  .update({ circuit_id: ckt.id })
+                  .in("id", cluster.deviceIds)
+              );
+              if (assignErr) {
+                showError(assignErr.message);
+                break;
+              }
               setDevices((prev) =>
                 prev.map((d) =>
                   cluster.deviceIds.includes(d.id)
@@ -1715,28 +1736,36 @@ export function SheetViewer({
           });
           const supabase = createClient();
           // Keep user_edited routes
-          await supabase
-            .from("routes")
-            .delete()
-            .eq("circuit_id", circuitId)
-            .eq("user_edited", false);
+          const { error: delErr } = await withWriteTimeout(() =>
+            supabase
+              .from("routes")
+              .delete()
+              .eq("circuit_id", circuitId)
+              .eq("user_edited", false)
+          );
+          if (delErr) {
+            showError(delErr.message);
+            return;
+          }
           const kept = routes.filter(
             (r) => r.circuit_id === circuitId && r.user_edited
           );
           const others = routes.filter((r) => r.circuit_id !== circuitId);
           if (proposed.length) {
-            const { data, error } = await supabase
-              .from("routes")
-              .insert(
-                proposed.map((p) => ({
-                  circuit_id: circuitId,
-                  kind: p.kind,
-                  path: p.path,
-                  plan_length_ft: p.plan_length_ft,
-                  user_edited: false,
-                }))
-              )
-              .select("*");
+            const { data, error } = await withWriteTimeout(() =>
+              supabase
+                .from("routes")
+                .insert(
+                  proposed.map((p) => ({
+                    circuit_id: circuitId,
+                    kind: p.kind,
+                    path: p.path,
+                    plan_length_ft: p.plan_length_ft,
+                    user_edited: false,
+                  }))
+                )
+                .select("*")
+            );
             if (error) {
               showError(error.message);
               return;
@@ -1763,11 +1792,17 @@ export function SheetViewer({
           const kept = routes.filter((r) => r.user_edited || !!r.lv_system);
           const cktIds = circuits.map((c) => c.id);
           if (cktIds.length) {
-            await supabase
-              .from("routes")
-              .delete()
-              .in("circuit_id", cktIds)
-              .eq("user_edited", false);
+            const { error: delErr } = await withWriteTimeout(() =>
+              supabase
+                .from("routes")
+                .delete()
+                .in("circuit_id", cktIds)
+                .eq("user_edited", false)
+            );
+            if (delErr) {
+              showError(delErr.message);
+              return;
+            }
           }
           const inserted: Route[] = [];
           for (const c of circuits) {
@@ -1787,18 +1822,20 @@ export function SheetViewer({
               entryDeviceId: c.entry_device_id,
             });
             if (!proposed.length) continue;
-            const { data, error } = await supabase
-              .from("routes")
-              .insert(
-                proposed.map((p) => ({
-                  circuit_id: c.id,
-                  kind: p.kind,
-                  path: p.path,
-                  plan_length_ft: p.plan_length_ft,
-                  user_edited: false,
-                }))
-              )
-              .select("*");
+            const { data, error } = await withWriteTimeout(() =>
+              supabase
+                .from("routes")
+                .insert(
+                  proposed.map((p) => ({
+                    circuit_id: c.id,
+                    kind: p.kind,
+                    path: p.path,
+                    plan_length_ft: p.plan_length_ft,
+                    user_edited: false,
+                  }))
+                )
+                .select("*")
+            );
             if (error) {
               showError(error.message);
               break;
@@ -1825,12 +1862,18 @@ export function SheetViewer({
             ftPerPx,
           });
           const supabase = createClient();
-          await supabase
-            .from("routes")
-            .delete()
-            .eq("sheet_id", sheetId)
-            .eq("lv_system", "fire")
-            .eq("user_edited", false);
+          const { error: delErr } = await withWriteTimeout(() =>
+            supabase
+              .from("routes")
+              .delete()
+              .eq("sheet_id", sheetId)
+              .eq("lv_system", "fire")
+              .eq("user_edited", false)
+          );
+          if (delErr) {
+            showError(delErr.message);
+            return;
+          }
           const keep = routes.filter(
             (r) => r.lv_system !== "fire" || r.user_edited
           );
@@ -1838,20 +1881,22 @@ export function SheetViewer({
             setRoutes(keep);
             return;
           }
-          const { data, error } = await supabase
-            .from("routes")
-            .insert(
-              proposed.map((p) => ({
-                circuit_id: null,
-                sheet_id: sheetId,
-                lv_system: "fire",
-                kind: p.kind,
-                path: p.path,
-                plan_length_ft: p.plan_length_ft,
-                user_edited: false,
-              }))
-            )
-            .select("*");
+          const { data, error } = await withWriteTimeout(() =>
+            supabase
+              .from("routes")
+              .insert(
+                proposed.map((p) => ({
+                  circuit_id: null,
+                  sheet_id: sheetId,
+                  lv_system: "fire",
+                  kind: p.kind,
+                  path: p.path,
+                  plan_length_ft: p.plan_length_ft,
+                  user_edited: false,
+                }))
+              )
+              .select("*")
+          );
           if (error) {
             showError(error.message);
             return;
@@ -1872,12 +1917,18 @@ export function SheetViewer({
           const drops = findDataDrops(devices);
           const proposed = routeDataSystem({ idfs, drops, ftPerPx });
           const supabase = createClient();
-          await supabase
-            .from("routes")
-            .delete()
-            .eq("sheet_id", sheetId)
-            .eq("lv_system", "data")
-            .eq("user_edited", false);
+          const { error: delErr } = await withWriteTimeout(() =>
+            supabase
+              .from("routes")
+              .delete()
+              .eq("sheet_id", sheetId)
+              .eq("lv_system", "data")
+              .eq("user_edited", false)
+          );
+          if (delErr) {
+            showError(delErr.message);
+            return;
+          }
           const keep = routes.filter(
             (r) => r.lv_system !== "data" || r.user_edited
           );
@@ -1885,20 +1936,22 @@ export function SheetViewer({
             setRoutes(keep);
             return;
           }
-          const { data, error } = await supabase
-            .from("routes")
-            .insert(
-              proposed.map((p) => ({
-                circuit_id: null,
-                sheet_id: sheetId,
-                lv_system: "data",
-                kind: p.kind,
-                path: p.path,
-                plan_length_ft: p.plan_length_ft,
-                user_edited: false,
-              }))
-            )
-            .select("*");
+          const { data, error } = await withWriteTimeout(() =>
+            supabase
+              .from("routes")
+              .insert(
+                proposed.map((p) => ({
+                  circuit_id: null,
+                  sheet_id: sheetId,
+                  lv_system: "data",
+                  kind: p.kind,
+                  path: p.path,
+                  plan_length_ft: p.plan_length_ft,
+                  user_edited: false,
+                }))
+              )
+              .select("*")
+          );
           if (error) {
             showError(error.message);
             return;
@@ -1916,10 +1969,12 @@ export function SheetViewer({
             )
           );
           const supabase = createClient();
-          const { error } = await supabase
-            .from("circuits")
-            .update({ entry_device_id: entryDeviceId })
-            .eq("id", circuitId);
+          const { error } = await withWriteTimeout(() =>
+            supabase
+              .from("circuits")
+              .update({ entry_device_id: entryDeviceId })
+              .eq("id", circuitId)
+          );
           if (error) {
             showError(error.message);
             setCircuits((prev) =>
@@ -1933,7 +1988,13 @@ export function SheetViewer({
         }}
         onResetRoutes={async (circuitId) => {
           const supabase = createClient();
-          await supabase.from("routes").delete().eq("circuit_id", circuitId);
+          const { error: delErr } = await withWriteTimeout(() =>
+            supabase.from("routes").delete().eq("circuit_id", circuitId)
+          );
+          if (delErr) {
+            showError(delErr.message);
+            return;
+          }
           setRoutes((prev) => prev.filter((r) => r.circuit_id !== circuitId));
           // re-route fresh
           if (!ftPerPx) return;
@@ -1953,18 +2014,20 @@ export function SheetViewer({
             entryDeviceId: circuit.entry_device_id,
           });
           if (!proposed.length) return;
-          const { data, error } = await supabase
-            .from("routes")
-            .insert(
-              proposed.map((p) => ({
-                circuit_id: circuitId,
-                kind: p.kind,
-                path: p.path,
-                plan_length_ft: p.plan_length_ft,
-                user_edited: false,
-              }))
-            )
-            .select("*");
+          const { data, error } = await withWriteTimeout(() =>
+            supabase
+              .from("routes")
+              .insert(
+                proposed.map((p) => ({
+                  circuit_id: circuitId,
+                  kind: p.kind,
+                  path: p.path,
+                  plan_length_ft: p.plan_length_ft,
+                  user_edited: false,
+                }))
+              )
+              .select("*")
+          );
           if (error) {
             showError(error.message);
             return;

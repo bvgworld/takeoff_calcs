@@ -3,6 +3,7 @@
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { withWriteTimeout } from "@/lib/write-guard";
 import { DEFAULT_SETTINGS } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
 import { useToast } from "@/components/ui/Toast";
@@ -25,15 +26,17 @@ export function NewProjectForm() {
       showError("Not signed in.");
       return;
     }
-    const { data, error } = await supabase
-      .from("projects")
-      .insert({
-        name: name.trim(),
-        user_id: user.id,
-        settings: DEFAULT_SETTINGS,
-      })
-      .select("id")
-      .single();
+    const { data, error } = await withWriteTimeout(() =>
+      supabase
+        .from("projects")
+        .insert({
+          name: name.trim(),
+          user_id: user.id,
+          settings: DEFAULT_SETTINGS,
+        })
+        .select("id")
+        .single()
+    );
     setBusy(false);
     if (error) {
       showError(error.message, () => void createProject());

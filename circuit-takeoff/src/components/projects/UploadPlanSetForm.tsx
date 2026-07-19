@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { createClient } from "@/lib/supabase/client";
+import { withWriteTimeout } from "@/lib/write-guard";
 import {
   loadPdfDocument,
   rasterPdfPageFromDoc,
@@ -228,7 +229,9 @@ export function UploadPlanSetForm({ projectId }: { projectId: string }) {
         startSortOrder,
         pages: pageInputs,
       });
-      const { error: rowErr } = await supabase.from("sheets").insert(rows);
+      const { error: rowErr } = await withWriteTimeout(() =>
+        supabase.from("sheets").insert(rows)
+      );
       if (rowErr) throw new Error(`Database (sheets): ${rowErr.message}`);
 
       setMsg(`Created ${rows.length} sheet${rows.length === 1 ? "" : "s"}.`);

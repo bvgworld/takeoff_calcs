@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
+import { withWriteTimeout } from "@/lib/write-guard";
 import { useToast } from "@/components/ui/Toast";
 import {
   DISCIPLINE_BADGE,
@@ -53,10 +54,12 @@ export function SheetIndex({
     if (!changed.length) return;
     const supabase = createClient();
     for (const s of changed) {
-      const { error } = await supabase
-        .from("sheets")
-        .update({ sort_order: s.sort_order })
-        .eq("id", s.id);
+      const { error } = await withWriteTimeout(() =>
+        supabase
+          .from("sheets")
+          .update({ sort_order: s.sort_order })
+          .eq("id", s.id)
+      );
       if (error) {
         showError(error.message, () => void persistOrder(next));
         return;

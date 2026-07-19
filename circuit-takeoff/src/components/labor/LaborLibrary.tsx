@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { withWriteTimeout } from "@/lib/write-guard";
 import { useToast } from "@/components/ui/Toast";
 import { Button } from "@/components/ui/Button";
 import {
@@ -56,16 +57,18 @@ export function LaborLibrary({ userId, initialItems }: Props) {
     }
     setBusy(true);
     const supabase = createClient();
-    const { error } = await supabase.from("labor_items").upsert(
-      {
-        user_id: userId,
-        item_key: form.item_key.trim(),
-        uom: form.uom,
-        hours_per_uom: hours,
-        source: form.source,
-        notes: form.notes.trim() || null,
-      },
-      { onConflict: "user_id,item_key" }
+    const { error } = await withWriteTimeout(() =>
+      supabase.from("labor_items").upsert(
+        {
+          user_id: userId,
+          item_key: form.item_key.trim(),
+          uom: form.uom,
+          hours_per_uom: hours,
+          source: form.source,
+          notes: form.notes.trim() || null,
+        },
+        { onConflict: "user_id,item_key" }
+      )
     );
     setBusy(false);
     if (error) {
@@ -81,10 +84,9 @@ export function LaborLibrary({ userId, initialItems }: Props) {
       prev.map((i) => (i.id === id ? { ...i, ...patch } : i))
     );
     const supabase = createClient();
-    const { error } = await supabase
-      .from("labor_items")
-      .update(patch)
-      .eq("id", id);
+    const { error } = await withWriteTimeout(() =>
+      supabase.from("labor_items").update(patch).eq("id", id)
+    );
     if (error) {
       showError(error.message);
       await refetch();
@@ -94,10 +96,9 @@ export function LaborLibrary({ userId, initialItems }: Props) {
   async function removeItem(id: string) {
     setItems((prev) => prev.filter((i) => i.id !== id));
     const supabase = createClient();
-    const { error } = await supabase
-      .from("labor_items")
-      .delete()
-      .eq("id", id);
+    const { error } = await withWriteTimeout(() =>
+      supabase.from("labor_items").delete().eq("id", id)
+    );
     if (error) {
       showError(error.message);
       await refetch();
@@ -118,14 +119,16 @@ export function LaborLibrary({ userId, initialItems }: Props) {
     }
     setBusy(true);
     const supabase = createClient();
-    const { error } = await supabase.from("labor_items").upsert(
-      rows.map((r) => ({
-        user_id: userId,
-        item_key: r.item_key,
-        uom: r.uom,
-        hours_per_uom: r.hours_per_uom,
-      })),
-      { onConflict: "user_id,item_key" }
+    const { error } = await withWriteTimeout(() =>
+      supabase.from("labor_items").upsert(
+        rows.map((r) => ({
+          user_id: userId,
+          item_key: r.item_key,
+          uom: r.uom,
+          hours_per_uom: r.hours_per_uom,
+        })),
+        { onConflict: "user_id,item_key" }
+      )
     );
     setBusy(false);
     if (error) {

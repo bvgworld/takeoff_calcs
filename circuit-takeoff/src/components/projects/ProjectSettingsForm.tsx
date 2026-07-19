@@ -3,6 +3,7 @@
 import { FormEvent, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { withWriteTimeout } from "@/lib/write-guard";
 import type { BranchMethod, ProjectSettings } from "@/lib/types";
 import { DEFAULT_SETTINGS } from "@/lib/types";
 import { Button } from "@/components/ui/Button";
@@ -30,10 +31,9 @@ export function ProjectSettingsForm({
   async function saveSettings() {
     setBusy(true);
     const supabase = createClient();
-    const { error } = await supabase
-      .from("projects")
-      .update({ settings: s })
-      .eq("id", projectId);
+    const { error } = await withWriteTimeout(() =>
+      supabase.from("projects").update({ settings: s }).eq("id", projectId)
+    );
     setBusy(false);
     if (error) showError(error.message, () => void saveSettings());
     else router.refresh();

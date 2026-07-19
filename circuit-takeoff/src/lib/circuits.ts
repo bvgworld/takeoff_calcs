@@ -4,6 +4,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Circuit, CircuitType } from "./types";
+import { withWriteTimeout } from "./write-guard";
 
 export type NewCircuitInput = {
   sheet_id: string;
@@ -49,18 +50,20 @@ export async function insertCircuitWithRetry(
   let lastError: { message?: string; code?: string } | null = null;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const { data, error } = await supabase
-      .from("circuits")
-      .insert({
-        sheet_id: input.sheet_id,
-        panel_device_id: input.panel_device_id,
-        number,
-        ctype: input.ctype,
-        voltage: input.voltage,
-        breaker_amps: input.breaker_amps ?? 20,
-      })
-      .select("*")
-      .single();
+    const { data, error } = await withWriteTimeout(() =>
+      supabase
+        .from("circuits")
+        .insert({
+          sheet_id: input.sheet_id,
+          panel_device_id: input.panel_device_id,
+          number,
+          ctype: input.ctype,
+          voltage: input.voltage,
+          breaker_amps: input.breaker_amps ?? 20,
+        })
+        .select("*")
+        .single()
+    );
 
     if (!error && data) return data as Circuit;
 

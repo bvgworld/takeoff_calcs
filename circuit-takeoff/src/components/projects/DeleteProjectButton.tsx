@@ -3,6 +3,7 @@
 import type { MouseEvent } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { withWriteTimeout } from "@/lib/write-guard";
 import { Button } from "@/components/ui/Button";
 import { useToast } from "@/components/ui/Toast";
 
@@ -18,10 +19,9 @@ export function DeleteProjectButton({
 
   async function deleteProject() {
     const supabase = createClient();
-    const { error } = await supabase
-      .from("projects")
-      .delete()
-      .eq("id", projectId);
+    const { error } = await withWriteTimeout(() =>
+      supabase.from("projects").delete().eq("id", projectId)
+    );
     if (error) {
       showError(error.message, () => void deleteProject());
       return;
