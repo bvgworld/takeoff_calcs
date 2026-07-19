@@ -1,6 +1,7 @@
 import { getCatalogEntry } from "./catalog";
 import { runCircuitChecks, farthestFromRoutes } from "./checks";
 import { resolveCatalogId } from "./devices";
+import { attachLaborHours, type LaborRow } from "./labor";
 import { buildLvTakeoff } from "./lv-routing";
 import { pickMcCable, parseWireLabel, thhnItem } from "./materials";
 import { applyLengthAdders } from "./routing";
@@ -29,6 +30,11 @@ export type TakeoffLine = {
   level?: string;
   discipline?: string;
   sheet?: string;
+  /**
+   * Labor hours (qty × hours_per_uom). undefined = labor join not run;
+   * null = no labor entry for this item (rendered as "—").
+   */
+  hours?: number | null;
 };
 
 /** Sheet metadata used to tag takeoff lines for grouping/CSV. */
@@ -379,6 +385,8 @@ export function buildProjectTakeoff(opts: {
   ftPerPxBySheetId: Map<string, number> | Record<string, number>;
   /** Optional sheet metadata — tags lines with level/discipline/sheet. */
   sheets?: TakeoffSheetMeta[];
+  /** Optional labor units — joins by item_key and attaches hours. */
+  laborItems?: LaborRow[];
 }): { lines: TakeoffLine[]; totals: TakeoffLine[] } {
   const { circuits, devices, routes } = opts;
   const settings = mergeSettings(opts.settings);
@@ -467,7 +475,10 @@ export function buildProjectTakeoff(opts: {
     });
   });
 
-  const lines = [...powerLines, ...lvLines, ...unassignedJboxLines];
+  let lines = [...powerLines, ...lvLines, ...unassignedJboxLines];
+  if (opts.laborItems) {
+    lines = attachLaborHours(lines, opts.laborItems);
+  }
   const totals = rollupTakeoffTotals(lines);
 
   return { lines, totals };
@@ -482,6 +493,9 @@ export function rollupTakeoffTotals(lines: TakeoffLine[]): TakeoffLine[] {
     const existing = map.get(key);
     if (existing) {
       existing.qty += l.qty;
+      if (l.hours != null) {
+        existing.hours = (existing.hours ?? 0) + l.hours;
+      }
     } else {
       map.set(key, {
         circuit: "TOTAL",
@@ -489,6 +503,7 @@ export function rollupTakeoffTotals(lines: TakeoffLine[]): TakeoffLine[] {
         qty: l.qty,
         uom: l.uom,
         notes: "Rolled up across circuits",
+        ...(l.hours !== undefined ? { hours: l.hours } : {}),
       });
     }
   }
@@ -515,7 +530,7 @@ export function filterTakeoffLines(
 }
 
 export function takeoffToCsv(lines: TakeoffLine[]): string {
-  const header = "level,discipline,sheet,circuit,item,qty,uom,notes";
+  const header = "level,discipline,sheet,circuit,item,qty,uom,hours,notes";
   const body = lines
     .map((l) =>
       [
@@ -526,6 +541,7 @@ export function takeoffToCsv(lines: TakeoffLine[]): string {
         l.item,
         l.qty,
         l.uom,
+        l.hours != null ? Number(l.hours.toFixed(2)) : "",
         l.notes,
       ]
         .map((c) => `"${String(c).replace(/"/g, '""')}"`)

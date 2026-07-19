@@ -451,7 +451,7 @@ describe("CSV + summary", () => {
     });
     const csv = takeoffToCsv([...lines, ...totals]);
     expect(csv.startsWith("\uFEFF")).toBe(true);
-    expect(csv).toContain("circuit,item,qty,uom,notes");
+    expect(csv).toContain("circuit,item,qty,uom,hours,notes");
     expect(csv).toContain('"TOTAL"');
     const summary = summarizeTakeoff(lines, devices);
     expect(summary.emtLf).toBeGreaterThan(0);

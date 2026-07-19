@@ -114,7 +114,9 @@ describe("takeoff CSV with plan-set columns", () => {
   it("CSV includes level, discipline, sheet columns", () => {
     const csv = takeoffToCsv(lines);
     const [header, row1, row2] = csv.replace("\uFEFF", "").split("\n");
-    expect(header).toBe("level,discipline,sheet,circuit,item,qty,uom,notes");
+    expect(header).toBe(
+      "level,discipline,sheet,circuit,item,qty,uom,hours,notes"
+    );
     expect(row1).toContain('"Level 1","power","E101 Power","Ckt 1"');
     expect(row2.startsWith('"","",""')).toBe(true);
   });

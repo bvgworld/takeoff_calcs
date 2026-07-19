@@ -6,6 +6,7 @@ import { AppNav } from "@/components/auth/AppNav";
 import { ExportCsvButton } from "@/components/takeoff/ExportCsvButton";
 import { TakeoffView } from "@/components/takeoff/TakeoffView";
 import { buildProjectTakeoff } from "@/lib/takeoff";
+import type { LaborRow } from "@/lib/labor";
 import type {
   Circuit,
   Device,
@@ -106,6 +107,13 @@ export default async function TakeoffPage({
     routes = Array.from(byId.values());
   }
 
+  const { data: laborData } = await supabase
+    .from("labor_items")
+    .select("item_key,uom,hours_per_uom")
+    .eq("user_id", user.id);
+  const laborItems = (laborData as LaborRow[] | null) || [];
+  const laborEnabled = laborItems.length > 0;
+
   const { lines, totals } = buildProjectTakeoff({
     circuits,
     devices,
@@ -118,6 +126,7 @@ export default async function TakeoffPage({
       discipline: s.discipline ?? "power",
       level: s.level ?? "",
     })),
+    ...(laborEnabled ? { laborItems } : {}),
   });
 
   const csvRows = [...lines, ...totals];
@@ -169,7 +178,11 @@ export default async function TakeoffPage({
             </Link>
           </div>
         ) : (
-          <TakeoffView lines={lines} grandTotals={totals} />
+          <TakeoffView
+            lines={lines}
+            grandTotals={totals}
+            laborEnabled={laborEnabled}
+          />
         )}
       </main>
     </div>

@@ -12,20 +12,27 @@ import {
   DISCIPLINE_LABELS,
   levelLabel,
 } from "@/lib/plan-sets";
+import { totalLaborHours } from "@/lib/labor";
 import type { Discipline } from "@/lib/types";
 
 function isDiscipline(d: string): d is Discipline {
   return d in DISCIPLINE_LABELS;
 }
 
+function fmtHours(h: number): string {
+  return h.toFixed(2);
+}
+
 function LinesTable({
   rows,
   circuitCell,
   boldQty = false,
+  showHours = false,
 }: {
   rows: TakeoffLine[];
   circuitCell?: string;
   boldQty?: boolean;
+  showHours?: boolean;
 }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-perry-silver bg-white">
@@ -35,6 +42,9 @@ function LinesTable({
             <th className="px-3 py-2 font-semibold">Item</th>
             <th className="px-3 py-2 text-right font-semibold">Qty</th>
             <th className="px-3 py-2 font-semibold">UOM</th>
+            {showHours && (
+              <th className="px-3 py-2 text-right font-semibold">Hours</th>
+            )}
             <th className="px-3 py-2 font-semibold">Circuit</th>
             <th className="px-3 py-2 font-semibold">Notes</th>
           </tr>
@@ -54,6 +64,11 @@ function LinesTable({
                 {r.qty}
               </td>
               <td className="px-3 py-2 text-gray-600">{r.uom}</td>
+              {showHours && (
+                <td className="px-3 py-2 text-right tabular-nums text-gray-700">
+                  {r.hours != null ? fmtHours(r.hours) : "—"}
+                </td>
+              )}
               <td className="px-3 py-2 text-gray-600">
                 {circuitCell ?? r.circuit}
               </td>
@@ -63,7 +78,7 @@ function LinesTable({
           {!rows.length && (
             <tr>
               <td
-                colSpan={5}
+                colSpan={showHours ? 6 : 5}
                 className="px-3 py-8 text-center text-sm text-gray-500"
               >
                 No material quantities yet (route circuits first).
@@ -103,11 +118,24 @@ function Chip({
 export function TakeoffView({
   lines,
   grandTotals,
+  laborEnabled = false,
 }: {
   lines: TakeoffLine[];
   grandTotals: TakeoffLine[];
+  /** True when the user has labor items — shows the Hours column. */
+  laborEnabled?: boolean;
 }) {
   const [filter, setFilter] = useState<TakeoffFilter>({ kind: "all" });
+
+  // Distinct items with no labor value (lines carry hours === null).
+  const unmatched = useMemo(() => {
+    if (!laborEnabled) return 0;
+    const s = new Set<string>();
+    for (const l of lines) {
+      if (l.hours === null) s.add(l.item);
+    }
+    return s.size;
+  }, [laborEnabled, lines]);
 
   const disciplines = useMemo(
     () =>
@@ -152,6 +180,17 @@ export function TakeoffView({
 
   return (
     <div className="mt-6 space-y-8">
+      {laborEnabled && unmatched > 0 && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          {unmatched} item{unmatched === 1 ? "" : "s"} have no labor value —
+          add them in the{" "}
+          <a href="/labor" className="font-semibold underline">
+            labor library
+          </a>
+          .
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         <Chip
           active={filter.kind === "all"}
@@ -209,10 +248,15 @@ export function TakeoffView({
                   <h3 className="mb-1 text-sm font-semibold text-perry-industrial">
                     {ckt}
                   </h3>
-                  <LinesTable rows={rows} />
+                  <LinesTable rows={rows} showHours={laborEnabled} />
                 </div>
               ))}
             </div>
+            {laborEnabled && (
+              <p className="mt-2 text-right text-sm font-semibold tabular-nums text-perry-industrial">
+                Section hours: {fmtHours(totalLaborHours(sec.rows))}
+              </p>
+            )}
           </section>
         );
       })}
@@ -228,7 +272,17 @@ export function TakeoffView({
           <h2 className="mb-2 font-display text-lg text-perry-industrial">
             Filtered totals
           </h2>
-          <LinesTable rows={filteredTotals} circuitCell="FILTERED" boldQty />
+          <LinesTable
+            rows={filteredTotals}
+            circuitCell="FILTERED"
+            boldQty
+            showHours={laborEnabled}
+          />
+          {laborEnabled && (
+            <p className="mt-2 text-right text-sm font-semibold tabular-nums text-perry-industrial">
+              Filtered hours: {fmtHours(totalLaborHours(filteredTotals))}
+            </p>
+          )}
         </section>
       )}
 
@@ -236,7 +290,17 @@ export function TakeoffView({
         <h2 className="mb-2 font-display text-lg text-perry-industrial">
           Project totals — entire project
         </h2>
-        <LinesTable rows={grandTotals} circuitCell="TOTAL" boldQty />
+        <LinesTable
+          rows={grandTotals}
+          circuitCell="TOTAL"
+          boldQty
+          showHours={laborEnabled}
+        />
+        {laborEnabled && (
+          <p className="mt-2 text-right text-sm font-semibold tabular-nums text-perry-industrial">
+            Project hours: {fmtHours(totalLaborHours(grandTotals))}
+          </p>
+        )}
       </section>
     </div>
   );
