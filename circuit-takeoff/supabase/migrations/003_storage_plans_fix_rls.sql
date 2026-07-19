@@ -64,3 +64,12 @@ create policy "plans_delete" on storage.objects
       )
     )
   );
+
+-- Migration marker (table created in 011; guarded so fresh databases
+-- running 001..011 in order do not fail before 011 exists).
+create table if not exists schema_migrations (
+  filename text primary key,
+  applied_at timestamptz default now()
+);
+insert into schema_migrations (filename) values ('003_storage_plans_fix_rls.sql')
+  on conflict do nothing;

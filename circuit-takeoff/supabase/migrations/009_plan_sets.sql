@@ -21,3 +21,12 @@ with ordered as (
 update sheets s set sort_order = o.rn
 from ordered o
 where s.id = o.id and s.sort_order = 0;
+
+-- Migration marker (table created in 011; guarded so fresh databases
+-- running 001..011 in order do not fail before 011 exists).
+create table if not exists schema_migrations (
+  filename text primary key,
+  applied_at timestamptz default now()
+);
+insert into schema_migrations (filename) values ('009_plan_sets.sql')
+  on conflict do nothing;

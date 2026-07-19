@@ -254,7 +254,7 @@ export function UploadPlanSetForm({ projectId }: { projectId: string }) {
       setMsg("Uploading plan set PDF…");
       const bytes = await f.arrayBuffer();
       const hash = (await sha256Hex(bytes)).slice(0, 16);
-      const setPath = planSetPath(projectId, hash);
+      const setPath = planSetPath(user.id, projectId, hash);
       const { error: pdfErr } = await supabase.storage
         .from("plans")
         .upload(setPath, f, {

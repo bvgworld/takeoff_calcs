@@ -33,7 +33,7 @@ function pageInput(
 describe("plan set sheet inserts", () => {
   const rows = buildSheetInserts({
     projectId: "proj1",
-    sourcePdfPath: planSetPath("proj1", "abc123"),
+    sourcePdfPath: planSetPath("u1", "proj1", "abc123"),
     startSortOrder: 4,
     pages: [
       pageInput({ sheetId: "s-a", pageNumber: 7, discipline: "power" }),
@@ -54,7 +54,8 @@ describe("plan set sheet inserts", () => {
   });
 
   it("sheets created from one PDF share source_pdf_path", () => {
-    expect(rows[0].source_pdf_path).toBe("proj1/set-abc123.pdf");
+    // uid-first path — storage RLS only allows {userId}/... keys.
+    expect(rows[0].source_pdf_path).toBe("u1/proj1/set-abc123.pdf");
     expect(rows[1].source_pdf_path).toBe(rows[0].source_pdf_path);
     expect(rows[0].pdf_path).toBe(rows[0].source_pdf_path);
   });

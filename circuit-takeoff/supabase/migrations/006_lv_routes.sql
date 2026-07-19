@@ -69,3 +69,12 @@ create policy "routes_owner" on routes
       )
     )
   );
+
+-- Migration marker (table created in 011; guarded so fresh databases
+-- running 001..011 in order do not fail before 011 exists).
+create table if not exists schema_migrations (
+  filename text primary key,
+  applied_at timestamptz default now()
+);
+insert into schema_migrations (filename) values ('006_lv_routes.sql')
+  on conflict do nothing;

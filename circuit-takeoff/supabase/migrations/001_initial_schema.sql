@@ -159,3 +159,12 @@ drop policy if exists "plans_delete" on storage.objects;
 create policy "plans_delete" on storage.objects
   for delete to authenticated
   using (bucket_id = 'plans' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- Migration marker (table created in 011; guarded so fresh databases
+-- running 001..011 in order do not fail before 011 exists).
+create table if not exists schema_migrations (
+  filename text primary key,
+  applied_at timestamptz default now()
+);
+insert into schema_migrations (filename) values ('001_initial_schema.sql')
+  on conflict do nothing;

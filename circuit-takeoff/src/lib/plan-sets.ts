@@ -1,6 +1,6 @@
 /**
  * Plan sets — one PDF upload becomes many sheets.
- * The source PDF is stored ONCE at plans/{projectId}/set-{hash}.pdf;
+ * The source PDF is stored ONCE at plans/{userId}/{projectId}/set-{hash}.pdf;
  * every sheet created from it references that path plus a page_number.
  * Discipline + level are metadata (not folders) that drive sheet
  * grouping, takeoff sections, and CSV columns.
@@ -38,9 +38,17 @@ export function levelLabel(level: string): string {
   return level.trim() || "No level";
 }
 
-/** Shared set PDF storage path within the "plans" bucket. */
-export function planSetPath(projectId: string, hash: string): string {
-  return `${projectId}/set-${hash}.pdf`;
+/**
+ * Shared set PDF storage path within the "plans" bucket. First folder
+ * MUST be the auth user id — storage RLS only allows uid-first paths
+ * (same reason the rasters live at `${userId}/${projectId}/...`).
+ */
+export function planSetPath(
+  userId: string,
+  projectId: string,
+  hash: string
+): string {
+  return `${userId}/${projectId}/set-${hash}.pdf`;
 }
 
 /** Default sheet name for a picked page: "{filename} p{N}". */
