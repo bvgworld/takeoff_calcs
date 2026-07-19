@@ -15,10 +15,16 @@ import type Konva from "konva";
 import useImage from "./use-image";
 import { CalibrateDialog } from "./CalibrateDialog";
 import { DeviceShape } from "./DeviceShape";
-import { SheetSidePanel } from "./SheetSidePanel";
+import { SheetSidePanel, type ArmedCircuit } from "./SheetSidePanel";
 import { RouteLayer } from "./RouteLayer";
 import { CircuitLegend } from "./CircuitLegend";
 import { PdfSharpOverlay } from "./PdfSharpOverlay";
+import {
+  PipelineBar,
+  type PipelineStage,
+  type PipelineStep,
+} from "./PipelineBar";
+import { ShortcutCheatSheet } from "./ShortcutCheatSheet";
 import { TakeoffSummaryCard } from "@/components/takeoff/TakeoffSummaryCard";
 import { useToast } from "@/components/ui/Toast";
 import { createClient } from "@/lib/supabase/client";
@@ -36,12 +42,11 @@ import {
 } from "@/lib/catalog";
 import {
   circuitDisplayLabel,
-  countByCategory,
   defaultAttrsForCatalog,
 } from "@/lib/devices";
-import { StampPicker } from "./StampPicker";
 import { pointerInNodeLocal } from "@/lib/konva-coords";
 import {
+  circuitHue,
   devicesForCircuitRouting,
   glueRoutesToMovedDevice,
   recomputeRoutePlanLengths,
@@ -208,18 +213,43 @@ export function SheetViewer({
   } | null>(null);
   const lassoRef = useRef<{ start: Point; active: boolean } | null>(null);
 
+  // Process-flow shell: active stage, armed circuit for painting, cheat sheet.
+  const [stage, setStage] = useState<PipelineStage>("calibrate");
+  const stageInitRef = useRef(false);
+  const [armed, setArmed] = useState<ArmedCircuit>(null);
+  const armedRef = useRef<ArmedCircuit>(null);
+  const [cheatOpen, setCheatOpen] = useState(false);
+  const lastPanelIdRef = useRef<string | null>(null);
+  const circuitsRef = useRef<Circuit[]>([]);
+
   const calibrated = isCalibrated(ftPerPx);
   const pointing = tool === "calibrate" || tool === "measure";
   const stamping = tool === "stamp";
   const stampEntry = stamping ? getCatalogEntry(lastCatalogId) : undefined;
 
   devicesRef.current = devices;
+  circuitsRef.current = circuits;
+  armedRef.current = armed;
 
-  const counts = useMemo(() => countByCategory(devices), [devices]);
   const selected = useMemo(
     () => devices.filter((d) => selectedIds.includes(d.id)),
     [devices, selectedIds]
   );
+  const circuitById = useMemo(
+    () => new Map(circuits.map((c) => [c.id, c])),
+    [circuits]
+  );
+
+  // Land on the first incomplete step once the sheet loads.
+  useEffect(() => {
+    if (sheetLoading || stageInitRef.current) return;
+    stageInitRef.current = true;
+    if (!calibrated) setStage("calibrate");
+    else if (!devices.length) setStage("devices");
+    else if (!circuits.length) setStage("circuits");
+    else if (!routes.some((r) => r.circuit_id)) setStage("routes");
+    else setStage("takeoff");
+  }, [sheetLoading, calibrated, devices, circuits, routes]);
 
   // Load devices, circuits, routes
   useEffect(() => {
@@ -327,7 +357,42 @@ export function SheetViewer({
         setCursor(null);
         setLasso(null);
         lassoRef.current = null;
+        setCheatOpen(false);
+        setArmed(null);
         selectTool("select");
+        return;
+      }
+
+      if (e.key === "?") {
+        e.preventDefault();
+        setCheatOpen((v) => !v);
+        return;
+      }
+
+      if (
+        (e.key === "n" || e.key === "N") &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey
+      ) {
+        e.preventDefault();
+        setStage("circuits");
+        setArmed((prev) => (prev === "new" ? null : "new"));
+        return;
+      }
+
+      if (
+        /^[1-9]$/.test(e.key) &&
+        !e.metaKey &&
+        !e.ctrlKey &&
+        !e.altKey
+      ) {
+        const ckt = circuitsRef.current[Number(e.key) - 1];
+        if (ckt) {
+          e.preventDefault();
+          setStage("circuits");
+          setArmed((prev) => (prev === ckt.id ? null : ckt.id));
+        }
         return;
       }
 
@@ -414,7 +479,10 @@ export function SheetViewer({
     lassoRef.current = null;
     if (t !== "measure") setMeasureResult(null);
     if (t !== "stamp" && t !== "select") setSelectedIds([]);
+    // Keep the step bar in sync with what the user is doing.
+    if (t === "stamp") setStage("devices");
     if (t === "calibrate") {
+      setStage("calibrate");
       setCalibratePending(null);
       setCalibrateDialogOpen(true);
     }
@@ -605,6 +673,127 @@ export function SheetViewer({
     }
   }
 
+  async function createCircuit(opts: {
+    panelId: string;
+    ctype: "lighting" | "receptacle";
+    voltage: number;
+  }): Promise<Circuit | null> {
+    if (circuitBusy) return null;
+    setCircuitBusy(true);
+    const { panelId, ctype, voltage } = opts;
+    lastPanelIdRef.current = panelId;
+    const nextNum =
+      circuitsRef.current.reduce((m, c) => Math.max(m, c.number), 0) + 1;
+    const tempId = `temp-${crypto.randomUUID()}`;
+    const optimistic: Circuit = {
+      id: tempId,
+      sheet_id: sheetId,
+      panel_device_id: panelId,
+      number: nextNum,
+      ctype,
+      voltage,
+      breaker_amps: 20,
+      entry_device_id: null,
+      created_at: new Date().toISOString(),
+    };
+    setCircuits((prev) => [...prev, optimistic]);
+    try {
+      const supabase = createClient();
+      const data = await insertCircuitWithRetry(supabase, {
+        sheet_id: sheetId,
+        panel_device_id: panelId,
+        number: nextNum,
+        ctype,
+        voltage,
+        breaker_amps: 20,
+      });
+      setCircuits((prev) => prev.map((c) => (c.id === tempId ? data : c)));
+      return data;
+    } catch (err) {
+      setCircuits((prev) => prev.filter((c) => c.id !== tempId));
+      showError(
+        err instanceof Error ? err.message : "Failed to create circuit"
+      );
+      return null;
+    } finally {
+      setCircuitBusy(false);
+    }
+  }
+
+  /** Panel = last used (fallback first); type = from the painted device. */
+  async function createCircuitForDevice(dev: Device): Promise<Circuit | null> {
+    const panels = devicesRef.current.filter((d) => d.type === "panel");
+    const panelId =
+      lastPanelIdRef.current &&
+      panels.some((p) => p.id === lastPanelIdRef.current)
+        ? lastPanelIdRef.current
+        : panels[0]?.id;
+    if (!panelId) {
+      showError("Stamp a Panel first — circuits need a panel to feed from.");
+      return null;
+    }
+    const ctype = dev.type === "receptacle" ? "receptacle" : "lighting";
+    const voltage =
+      ctype === "lighting"
+        ? settings.lighting_voltage
+        : settings.receptacle_voltage;
+    return createCircuit({ panelId, ctype, voltage });
+  }
+
+  async function assignDevices(ids: string[], circuitId: string | null) {
+    const targets = ids.filter((id) => {
+      const d = devicesRef.current.find((x) => x.id === id);
+      return d && d.type !== "panel";
+    });
+    if (!targets.length) return;
+    const run = async () => {
+      setDevices((prev) =>
+        prev.map((d) =>
+          targets.includes(d.id) ? { ...d, circuit_id: circuitId } : d
+        )
+      );
+      const supabase = createClient();
+      const { error } = await supabase
+        .from("devices")
+        .update({ circuit_id: circuitId })
+        .in("id", targets);
+      if (error) showError(error.message, () => void run());
+    };
+    await run();
+  }
+
+  /** Circuits stage: click toggles the device in/out of the armed circuit. */
+  async function paintDevice(dev: Device) {
+    const target = armedRef.current;
+    if (!target || dev.type === "panel") return;
+    if (target === "new") {
+      const ckt = await createCircuitForDevice(dev);
+      if (!ckt) return;
+      setArmed(ckt.id);
+      await assignDevices([dev.id], ckt.id);
+      return;
+    }
+    await assignDevices([dev.id], dev.circuit_id === target ? null : target);
+  }
+
+  /** Circuits stage: lasso adds all hit devices to the armed circuit. */
+  async function paintLasso(ids: string[]) {
+    const target = armedRef.current;
+    if (!target) return;
+    if (target === "new") {
+      const first = devicesRef.current.find(
+        (d) => ids.includes(d.id) && d.type !== "panel"
+      );
+      if (!first) return;
+      const ckt = await createCircuitForDevice(first);
+      if (!ckt) return;
+      setArmed(ckt.id);
+      await assignDevices(ids, ckt.id);
+      return;
+    }
+    await assignDevices(ids, target);
+  }
+
   async function persistAttrs(ids: string[], patch: Partial<Device["attrs"]>) {
     setDevices((prev) =>
       prev.map((d) =>
@@ -792,7 +981,11 @@ export function SheetViewer({
         .filter((d) => d.x >= x1 && d.x <= x2 && d.y >= y1 && d.y <= y2)
         .map((d) => d.id);
       if (hit.length) {
-        setSelectedIds((prev) => Array.from(new Set([...prev, ...hit])));
+        if (stage === "circuits" && armedRef.current) {
+          void paintLasso(hit);
+        } else {
+          setSelectedIds((prev) => Array.from(new Set([...prev, ...hit])));
+        }
       }
       lassoRef.current = null;
       setLasso(null);
@@ -886,8 +1079,50 @@ export function SheetViewer({
       }
     : null;
 
-  const topOffset = calibrated ? "top-12" : "top-16";
-  const legendOffset = calibrated ? "top-[4.75rem]" : "top-24";
+  // Everything shifts down 2.25rem to make room for the pipeline bar.
+  const topOffset = calibrated ? "top-[5.25rem]" : "top-[6.25rem]";
+  const legendOffset = calibrated ? "top-[7rem]" : "top-[8.25rem]";
+
+  const powerRouted = routes.some((r) => r.circuit_id);
+  const steps: PipelineStep[] = [
+    { id: "calibrate", label: "Calibrate", done: calibrated, blocked: null },
+    { id: "devices", label: "Devices", done: devices.length > 0, blocked: null },
+    {
+      id: "circuits",
+      label: "Circuits",
+      done: circuits.length > 0,
+      blocked: devices.some((d) => d.type !== "panel")
+        ? null
+        : "Stamp devices first",
+    },
+    {
+      id: "routes",
+      label: "Routes",
+      done: powerRouted,
+      blocked: !calibrated
+        ? "Calibrate first"
+        : circuits.length
+          ? null
+          : "Create a circuit first",
+    },
+    {
+      id: "takeoff",
+      label: "Takeoff",
+      done: powerRouted,
+      blocked: routes.length ? null : "Route circuits first",
+    },
+  ];
+
+  function goToStage(s: PipelineStage) {
+    const step = steps.find((x) => x.id === s);
+    if (step?.blocked && !step.done) return;
+    if (s !== "circuits") setArmed(null);
+    if (s === "calibrate" && !calibrated) {
+      selectTool("calibrate"); // sets stage + opens the dialog
+      return;
+    }
+    setStage(s);
+  }
 
   const takeoffSummary = useMemo(() => {
     const { lines } = buildProjectTakeoff({
@@ -902,8 +1137,10 @@ export function SheetViewer({
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-[#E8EAF0]">
+      <PipelineBar steps={steps} active={stage} onSelect={goToStage} />
+
       {!calibrated && (
-        <div className="absolute inset-x-0 top-0 z-30 bg-perry-signal px-4 py-2 text-center text-xs font-semibold text-white">
+        <div className="absolute inset-x-0 top-9 z-30 bg-perry-signal px-4 py-2 text-center text-xs font-semibold text-white">
           Not calibrated — footages unavailable. Routing and takeoff are
           blocked until you calibrate. Stamping is still allowed.
         </div>
@@ -912,7 +1149,7 @@ export function SheetViewer({
       {title && (
         <div
           className={`pointer-events-none absolute left-3 z-10 max-w-[40%] truncate font-display text-sm text-perry-industrial ${
-            calibrated ? "top-3" : "top-10"
+            calibrated ? "top-12" : "top-[4.75rem]"
           }`}
         >
           {title}
@@ -980,24 +1217,14 @@ export function SheetViewer({
           </button>
         ))}
         <span className="h-4 w-px bg-perry-silver" />
-        <StampPicker
-          activeCatalogId={stamping ? lastCatalogId : null}
-          onPick={(entry: CatalogEntry) => {
-            setLastCatalogId(entry.id);
-            selectTool("stamp");
-          }}
-        />
-        <span className="h-4 w-px bg-perry-silver" />
-        <span
-          className="text-xs font-semibold tabular-nums text-perry-industrial"
-          title="V select · S stamp · Space select/stamp · M measure · Esc cancel · ⌘/Ctrl+Z undo"
+        <button
+          type="button"
+          onClick={() => setCheatOpen(true)}
+          title="Keyboard shortcuts"
+          className="rounded-md bg-perry-white px-2 py-1 text-xs font-semibold text-perry-industrial hover:bg-perry-silver/30"
         >
-          F:{counts.fixture} R:{counts.receptacle} S:{counts.switch} P:
-          {counts.panel}
-          {counts.fire || counts.headend || counts.thermostat
-            ? ` · LV:${counts.fire + counts.headend + counts.thermostat}`
-            : ""}
-        </span>
+          ?
+        </button>
         {calibrated && ftPerPx != null && (
           <>
             <span className="h-4 w-px bg-perry-silver" />
@@ -1011,21 +1238,6 @@ export function SheetViewer({
       <div className={`absolute left-3 z-20 ${legendOffset}`}>
         <CircuitLegend circuits={circuits} />
       </div>
-
-      {calibrated && !sheetLoading && devices.length === 0 && (
-        <div
-          className={`absolute left-3 z-20 max-w-sm rounded-lg border border-perry-silver bg-white/95 px-3 py-2 text-xs text-gray-600 shadow-sm ${
-            circuits.length ? "top-32" : legendOffset
-          }`}
-        >
-          <p className="font-semibold text-perry-industrial">Get started</p>
-          <ol className="mt-1 list-decimal space-y-0.5 pl-4">
-            <li>Stamp a Panel, then fixtures / receptacles / switches</li>
-            <li>Open Circuits → New circuit → assign devices</li>
-            <li>Route — footages appear on the takeoff card</li>
-          </ol>
-        </div>
-      )}
 
       {(sheetLoading || !image) && (
         <div className="absolute inset-0 right-72 z-30 flex items-center justify-center bg-[#E8EAF0]/80">
@@ -1056,7 +1268,7 @@ export function SheetViewer({
 
       <div
         ref={containerRef}
-        className="absolute inset-0 right-72"
+        className="absolute bottom-0 left-0 right-72 top-9"
         style={{ cursor: cursorFor(tool) }}
       >
         <Stage
@@ -1117,6 +1329,27 @@ export function SheetViewer({
                 rotationDeg={rotation}
                 viewMoving={viewMoving}
               />
+              {/* Circuit halos — every assigned device wears its circuit's
+                  color at all times; the armed circuit glows stronger. */}
+              {devices.map((d) => {
+                if (!d.circuit_id) return null;
+                const ckt = circuitById.get(d.circuit_id);
+                if (!ckt) return null;
+                const isArmed = armed !== null && armed === d.circuit_id;
+                return (
+                  <Circle
+                    key={`halo-${d.id}`}
+                    x={d.x}
+                    y={d.y}
+                    radius={12 / scale}
+                    stroke={circuitHue(ckt.number)}
+                    strokeWidth={(isArmed ? 4 : 2.5) / scale}
+                    opacity={isArmed ? 0.95 : 0.55}
+                    listening={false}
+                    perfectDrawEnabled={false}
+                  />
+                );
+              })}
               {devices.map((d) => (
                 <DeviceShape
                   key={d.id}
@@ -1127,6 +1360,10 @@ export function SheetViewer({
                   listening={tool === "select" && !editRoutes}
                   onSelect={(shift) => {
                     if (tool !== "select") return;
+                    if (stage === "circuits" && armedRef.current) {
+                      void paintDevice(d);
+                      return;
+                    }
                     setSelectedIds((prev) => {
                       if (shift) {
                         return prev.includes(d.id)
@@ -1341,6 +1578,24 @@ export function SheetViewer({
       <TakeoffSummaryCard summary={takeoffSummary} />
 
       <SheetSidePanel
+        stage={stage}
+        onGoToStage={goToStage}
+        calibrated={calibrated}
+        renderDpi={renderDpi}
+        onStartCalibrate={() => selectTool("calibrate")}
+        lastCatalogId={lastCatalogId}
+        stamping={stamping}
+        onPickStamp={(entry: CatalogEntry) => {
+          setLastCatalogId(entry.id);
+          selectTool("stamp");
+        }}
+        armedCircuitId={armed}
+        onArmCircuit={(id) => {
+          setArmed(id);
+          if (id) setStage("circuits");
+        }}
+        takeoffSummary={takeoffSummary}
+        takeoffHref={backHref ? `${backHref}/takeoff` : null}
         selected={selected}
         onChangeLabel={(label) => {
           void persistAttrs(
@@ -1375,70 +1630,9 @@ export function SheetViewer({
         }}
         checkDetail={checkDetail}
         onCheckClick={setCheckDetail}
-        onNewCircuit={async (opts) => {
-          if (circuitBusy) return;
-          setCircuitBusy(true);
-          const { panelId, ctype, voltage } = opts;
-          const nextNum =
-            circuits.reduce((m, c) => Math.max(m, c.number), 0) + 1;
-          const tempId = `temp-${crypto.randomUUID()}`;
-          const optimistic: Circuit = {
-            id: tempId,
-            sheet_id: sheetId,
-            panel_device_id: panelId,
-            number: nextNum,
-            ctype,
-            voltage,
-            breaker_amps: 20,
-            entry_device_id: null,
-            created_at: new Date().toISOString(),
-          };
-          setCircuits((prev) => [...prev, optimistic]);
-          try {
-            const supabase = createClient();
-            const data = await insertCircuitWithRetry(supabase, {
-              sheet_id: sheetId,
-              panel_device_id: panelId,
-              number: nextNum,
-              ctype,
-              voltage,
-              breaker_amps: 20,
-            });
-            setCircuits((prev) =>
-              prev.map((c) => (c.id === tempId ? data : c))
-            );
-          } catch (err) {
-            setCircuits((prev) => prev.filter((c) => c.id !== tempId));
-            showError(
-              err instanceof Error ? err.message : "Failed to create circuit"
-            );
-          } finally {
-            setCircuitBusy(false);
-          }
-        }}
         circuitBusy={circuitBusy}
-        onAssignSelected={async (circuitId) => {
-          const ids = selectedIds.filter((id) => {
-            const d = devices.find((x) => x.id === id);
-            return d && d.type !== "panel";
-          });
-          if (!ids.length) return;
-          const run = async () => {
-            setDevices((prev) =>
-              prev.map((d) =>
-                ids.includes(d.id) ? { ...d, circuit_id: circuitId } : d
-              )
-            );
-            const supabase = createClient();
-            const { error } = await supabase
-              .from("devices")
-              .update({ circuit_id: circuitId })
-              .in("id", ids);
-            if (error) showError(error.message, () => void run());
-          };
-          await run();
-        }}
         onAutoGroup={async (ctype, panelId) => {
+          lastPanelIdRef.current = panelId;
           const clusters = autoGroupDevices({
             devices,
             ctype,
@@ -1781,6 +1975,8 @@ export function SheetViewer({
           ]);
         }}
       />
+
+      {cheatOpen && <ShortcutCheatSheet onClose={() => setCheatOpen(false)} />}
 
       {calibrateDialogOpen && (
         <CalibrateDialog
