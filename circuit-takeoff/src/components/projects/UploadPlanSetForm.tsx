@@ -1,16 +1,18 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import { createClient } from "@/lib/supabase/client";
 import { withWriteTimeout } from "@/lib/write-guard";
 import {
+  extractPdfPageText,
   loadPdfDocument,
   rasterPdfPageFromDoc,
   renderPdfThumbnail,
   TARGET_DPI,
 } from "@/lib/pdf";
+import { identifyPage } from "@/lib/sheet-id";
 import {
   buildSheetInserts,
   defaultSheetName,
@@ -35,7 +37,13 @@ type PageState = {
   name: string;
   discipline: Discipline;
   level: string;
+  /** Sheet number read from the title block (E101), null if not found. */
+  sheetNo: string | null;
+  /** Guessed sheet title from the title block, shown as subtext. */
+  titleGuess: string | null;
 };
+
+const PREVIEW_DPI = 144;
 
 type CreateStatus = {
   page: number;
@@ -60,10 +68,16 @@ export function UploadPlanSetForm({ projectId }: { projectId: string }) {
   const [pages, setPages] = useState<PageState[]>([]);
   const [statuses, setStatuses] = useState<CreateStatus[]>([]);
   const [warn, setWarn] = useState("");
+  const [preview, setPreview] = useState<number | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const previewCache = useRef<Map<number, string>>(new Map());
 
   function reset() {
     docRef.current = null;
     fileRef.current = null;
+    previewCache.current.clear();
+    setPreview(null);
+    setPreviewUrl(null);
     setPages([]);
     setStatuses([]);
     setWarn("");
@@ -88,6 +102,8 @@ export function UploadPlanSetForm({ projectId }: { projectId: string }) {
           name: defaultSheetName(f.name, i + 1),
           discipline: "power",
           level: "",
+          sheetNo: null,
+          titleGuess: null,
         })
       );
       setPages(initial);
@@ -105,6 +121,38 @@ export function UploadPlanSetForm({ projectId }: { projectId: string }) {
         } catch {
           // Leave the placeholder; the page can still be selected.
         }
+        // Identify the page from its text (title-block sheet number,
+        // guessed title, discipline). A failed guess never blocks —
+        // unknown pages keep "Page N" defaults.
+        try {
+          const { items, pageW, pageH } = await extractPdfPageText(doc, p);
+          const id = identifyPage(items, pageW, pageH);
+          if (id.sheetNumber || id.title) {
+            const def = defaultSheetName(f.name, p);
+            setPages((prev) =>
+              prev.map((x) =>
+                x.page === p
+                  ? {
+                      ...x,
+                      sheetNo: id.sheetNumber,
+                      titleGuess: id.title,
+                      // Prefill only values the user hasn't touched.
+                      name:
+                        id.sheetNumber && x.name === def
+                          ? id.sheetNumber
+                          : x.name,
+                      discipline:
+                        id.discipline && x.discipline === "power"
+                          ? id.discipline
+                          : x.discipline,
+                    }
+                  : x
+              )
+            );
+          }
+        } catch {
+          // Scanned / textless page — keep defaults.
+        }
       }
     } catch (err) {
       console.error(err);
@@ -118,6 +166,60 @@ export function UploadPlanSetForm({ projectId }: { projectId: string }) {
       prev.map((x) => (x.page === page ? { ...x, ...patch } : x))
     );
   }
+
+  // Preview zoom: render the previewed page at readable DPI (cached).
+  useEffect(() => {
+    if (preview == null) {
+      setPreviewUrl(null);
+      return;
+    }
+    const cached = previewCache.current.get(preview);
+    setPreviewUrl(cached ?? null);
+    if (cached || !docRef.current) return;
+    let cancelled = false;
+    renderPdfThumbnail(docRef.current, preview, PREVIEW_DPI)
+      .then(({ dataUrl }) => {
+        previewCache.current.set(preview, dataUrl);
+        if (!cancelled) setPreviewUrl(dataUrl);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [preview]);
+
+  // Preview keyboard: ← → move between pages, Space toggles the
+  // checkbox from inside the preview, Esc closes.
+  useEffect(() => {
+    if (preview == null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setPreview(null);
+        return;
+      }
+      if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+        e.preventDefault();
+        const dir = e.key === "ArrowRight" ? 1 : -1;
+        setPreview((cur) =>
+          cur == null
+            ? cur
+            : Math.min(pages.length, Math.max(1, cur + dir))
+        );
+        return;
+      }
+      if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        setPages((prev) =>
+          prev.map((x) =>
+            x.page === preview ? { ...x, checked: !x.checked } : x
+          )
+        );
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [preview, pages.length]);
 
   function setStatus(page: number, patch: Partial<CreateStatus>) {
     setStatuses((prev) =>
@@ -304,8 +406,9 @@ export function UploadPlanSetForm({ projectId }: { projectId: string }) {
                   >
                     <button
                       type="button"
+                      title="Click to preview"
                       className="block w-full"
-                      onClick={() => patchPage(p.page, { checked: !p.checked })}
+                      onClick={() => setPreview(p.page)}
                     >
                       <div className="flex h-36 items-center justify-center overflow-hidden rounded bg-perry-white">
                         {p.thumbUrl ? (
@@ -331,7 +434,13 @@ export function UploadPlanSetForm({ projectId }: { projectId: string }) {
                         }
                       />
                       Page {p.page}
+                      {p.sheetNo ? ` · ${p.sheetNo}` : ""}
                     </label>
+                    {p.titleGuess && (
+                      <p className="mt-0.5 truncate pl-6 text-[10px] text-gray-500">
+                        {p.titleGuess}
+                      </p>
+                    )}
                     {p.checked && (
                       <div className="mt-2 space-y-1.5">
                         <input
@@ -429,6 +538,94 @@ export function UploadPlanSetForm({ projectId }: { projectId: string }) {
           </div>
         </div>
       )}
+
+      {preview != null &&
+        phase === "picking" &&
+        (() => {
+          const p = pages.find((x) => x.page === preview);
+          if (!p) return null;
+          return (
+            <div
+              className="fixed inset-0 z-[60] flex flex-col items-center justify-center bg-perry-industrial/70 p-4"
+              onClick={() => setPreview(null)}
+            >
+              <div
+                className="flex max-w-[95vw] flex-col rounded-lg bg-white shadow-2xl"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="flex items-center justify-between gap-4 border-b border-perry-silver px-4 py-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-perry-industrial">
+                      Page {p.page}
+                      {p.sheetNo ? ` · ${p.sheetNo}` : ""}
+                    </p>
+                    {p.titleGuess && (
+                      <p className="truncate text-xs text-gray-500">
+                        {p.titleGuess}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1.5 text-xs font-semibold text-perry-industrial">
+                      <input
+                        type="checkbox"
+                        checked={p.checked}
+                        onChange={(e) =>
+                          patchPage(p.page, { checked: e.target.checked })
+                        }
+                      />
+                      Selected
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPreview(Math.max(1, p.page - 1))
+                      }
+                      disabled={p.page <= 1}
+                      className="rounded-md bg-perry-white px-2 py-1 text-xs font-semibold text-perry-industrial disabled:opacity-40"
+                    >
+                      ←
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setPreview(Math.min(pages.length, p.page + 1))
+                      }
+                      disabled={p.page >= pages.length}
+                      className="rounded-md bg-perry-white px-2 py-1 text-xs font-semibold text-perry-industrial disabled:opacity-40"
+                    >
+                      →
+                    </button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      onClick={() => setPreview(null)}
+                    >
+                      Close
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex items-center justify-center overflow-auto bg-perry-white p-2">
+                  {previewUrl ? (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img
+                      src={previewUrl}
+                      alt={`Page ${p.page} preview`}
+                      className="max-h-[80vh] max-w-full object-contain"
+                    />
+                  ) : (
+                    <div className="flex h-[60vh] w-[70vw] items-center justify-center text-sm text-gray-400">
+                      Rendering preview…
+                    </div>
+                  )}
+                </div>
+                <p className="border-t border-perry-silver px-4 py-1.5 text-center text-[10px] text-gray-500">
+                  ← → pages · Space selects · Esc closes
+                </p>
+              </div>
+            </div>
+          );
+        })()}
     </>
   );
 }

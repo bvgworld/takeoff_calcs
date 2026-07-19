@@ -5,6 +5,7 @@
  */
 
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
+import type { PageTextItem } from "./sheet-id";
 
 export const TARGET_DPI = 300;
 export const MAX_EDGE = 12000;
@@ -99,6 +100,36 @@ export async function rasterPdfPage(
 }> {
   const doc = await loadPdfDocument(file);
   return rasterPdfPageFromDoc(doc, pageNumber, dpi);
+}
+
+/**
+ * Extract a page's text items in PDF user space (x from left, y from
+ * bottom, h ≈ font size) for sheet-number identification. Scanned pages
+ * simply return zero items.
+ */
+export async function extractPdfPageText(
+  doc: PDFDocumentProxy,
+  pageNumber: number
+): Promise<{ items: PageTextItem[]; pageW: number; pageH: number }> {
+  const page = await doc.getPage(pageNumber);
+  const vp = page.getViewport({ scale: 1 });
+  const tc = await page.getTextContent();
+  const items: PageTextItem[] = [];
+  for (const raw of tc.items as Array<{
+    str?: string;
+    transform?: number[];
+    height?: number;
+  }>) {
+    if (!raw.str || !raw.str.trim() || !raw.transform) continue;
+    const [, , c, d, e, f] = raw.transform;
+    items.push({
+      str: raw.str,
+      x: e,
+      yFromBottom: f,
+      h: Math.hypot(c, d) || raw.height || 0,
+    });
+  }
+  return { items, pageW: vp.width, pageH: vp.height };
 }
 
 /** Low-res page thumbnail (~72 DPI, JPEG data URL) for the picker grid. */
