@@ -12,9 +12,11 @@ import { useToast } from "@/components/ui/Toast";
 export function ProjectSettingsForm({
   projectId,
   settings: initial,
+  rateTables = [],
 }: {
   projectId: string;
   settings: ProjectSettings;
+  rateTables?: { id: string; name: string; is_default: boolean }[];
 }) {
   const router = useRouter();
   const { showError } = useToast();
@@ -88,6 +90,31 @@ export function ProjectSettingsForm({
         >
           <option value="mc">MC allowed</option>
           <option value="emt">Full EMT</option>
+        </select>
+      </label>
+      <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500">
+        Rate table (pricing)
+        <select
+          value={s.rate_table_id ?? ""}
+          onChange={(e) =>
+            setS((prev) => ({
+              ...prev,
+              rate_table_id: e.target.value || null,
+            }))
+          }
+          className="mt-1 w-full rounded-md border border-perry-silver px-2 py-1.5 text-sm font-normal normal-case"
+        >
+          <option value="">
+            Default
+            {rateTables.find((t) => t.is_default)
+              ? ` (${rateTables.find((t) => t.is_default)!.name})`
+              : ""}
+          </option>
+          {rateTables.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
         </select>
       </label>
       <Button type="submit" disabled={busy} className="w-full">

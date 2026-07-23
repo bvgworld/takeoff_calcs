@@ -51,6 +51,15 @@ export default async function ProjectPage({
   const p = project as Project;
   const sheetRows = (sheets as Sheet[] | null) || [];
 
+  // Rate tables for the settings selector (pricing).
+  const { data: rtData } = await supabase
+    .from("rate_tables")
+    .select("id,name,is_default")
+    .order("created_at", { ascending: true });
+  const rateTables =
+    (rtData as { id: string; name: string; is_default: boolean }[] | null) ||
+    [];
+
   // Thumbnails (signed raster URLs) + device counts per sheet.
   const { data: signed } = sheetRows.length
     ? await supabase.storage
@@ -128,6 +137,7 @@ export default async function ProjectPage({
             <ProjectSettingsForm
               projectId={p.id}
               settings={p.settings as ProjectSettings}
+              rateTables={rateTables}
             />
           </aside>
         </div>

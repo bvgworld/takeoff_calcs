@@ -59,6 +59,21 @@ import {
 import { routeLayerInteractive } from "@/lib/canvas-gates";
 import { withWriteTimeout } from "@/lib/write-guard";
 import {
+  SymbolSearchPanel,
+  type SymbolSearchStatus,
+} from "./SymbolSearchPanel";
+import {
+  downscaleFactor,
+  matchesToDevices,
+  removeBatch,
+  validateTemplateRect,
+  DEFAULT_MATCH_THRESHOLD,
+  MATCH_MAX_EDGE,
+  type MatchCandidate,
+  type Rect as MatchRect,
+} from "@/lib/symbol-match";
+import type { SymbolMatchResponse } from "@/workers/symbol-match.worker";
+import {
   dataRouteReady,
   findDataDrops,
   findFacp,
@@ -89,7 +104,9 @@ import { DEFAULT_SETTINGS } from "@/lib/types";
 type UndoAction =
   | { kind: "stamp"; device: Device }
   | { kind: "delete"; devices: Device[] }
-  | { kind: "move"; before: { id: string; x: number; y: number }[] };
+  | { kind: "move"; before: { id: string; x: number; y: number }[] }
+  /** One "Find similar" apply — undone as a single action. */
+  | { kind: "batch_stamp"; devices: Device[] };
 
 const MIN_SCALE = 0.1;
 const MAX_SCALE = 8;
@@ -100,7 +117,9 @@ type Tool =
   | "pan"
   | "calibrate"
   | "measure"
-  | "stamp";
+  | "stamp"
+  /** "Find similar" — drag a box around one symbol to template-match. */
+  | "template";
 
 type Point = { x: number; y: number };
 
@@ -116,6 +135,8 @@ type Props = {
   initialFtPerPx: number | null;
   initialRotation?: SheetRotation;
   initialRenderDpi?: number | null;
+  /** Labor difficulty level 1/2/3 (pricing only). */
+  initialDifficulty?: 1 | 2 | 3;
   settings?: ProjectSettings;
   title?: string;
   backHref?: string;
@@ -131,6 +152,7 @@ export function SheetViewer({
   initialFtPerPx,
   initialRotation = 0,
   initialRenderDpi = null,
+  initialDifficulty = 1,
   settings: settingsProp,
   title,
   backHref,
@@ -185,6 +207,7 @@ export function SheetViewer({
     normalizeRotation(initialRotation ?? 0)
   );
   const [renderDpi] = useState<number | null>(initialRenderDpi ?? null);
+  const [difficulty, setDifficulty] = useState<1 | 2 | 3>(initialDifficulty);
   const [calibrateDialogOpen, setCalibrateDialogOpen] = useState(false);
   const [p1, setP1] = useState<Point | null>(null);
   const [cursor, setCursor] = useState<Point | null>(null);
@@ -213,6 +236,27 @@ export function SheetViewer({
     current: Point;
   } | null>(null);
   const lassoRef = useRef<{ start: Point; active: boolean } | null>(null);
+
+  // "Find similar" template matching (Prompt 13).
+  const [templateDrag, setTemplateDrag] = useState<{
+    start: Point;
+    current: Point;
+  } | null>(null);
+  const templateDragRef = useRef<{ start: Point; active: boolean } | null>(
+    null
+  );
+  const [symbolSearch, setSymbolSearch] = useState<{
+    status: SymbolSearchStatus;
+    templateRect: MatchRect;
+    progress: { done: number; total: number } | null;
+    candidates: MatchCandidate[];
+    threshold: number;
+    /** Manual check/uncheck overrides on top of the threshold. */
+    overrides: Record<string, boolean>;
+    error?: string;
+  } | null>(null);
+  const [symbolApplying, setSymbolApplying] = useState(false);
+  const matchWorkerRef = useRef<Worker | null>(null);
 
   // Process-flow shell: active stage, armed circuit for painting, cheat sheet.
   const [stage, setStage] = useState<PipelineStage>("calibrate");
@@ -478,6 +522,12 @@ export function SheetViewer({
     setCursor(null);
     setLasso(null);
     lassoRef.current = null;
+    setTemplateDrag(null);
+    templateDragRef.current = null;
+    if (t !== "template") closeSymbolSearch();
+    // Route lines listen while editing and would swallow the template
+    // drag's mousedown — symbol search needs the bare plan.
+    if (t === "template") setEditRoutes(false);
     if (t !== "measure") setMeasureResult(null);
     if (t !== "stamp" && t !== "select") setSelectedIds([]);
     // Keep the step bar in sync with what the user is doing.
@@ -507,6 +557,20 @@ export function SheetViewer({
 
   function rotateBy(dir: 1 | -1) {
     void persistRotation(rotateStep(rotation, dir));
+  }
+
+  /** Labor difficulty (pricing only) — no effect on routing or takeoff qty. */
+  async function persistDifficulty(next: 1 | 2 | 3) {
+    const prev = difficulty;
+    setDifficulty(next);
+    const supabase = createClient();
+    const { error } = await withWriteTimeout(() =>
+      supabase.from("sheets").update({ difficulty: next }).eq("id", sheetId)
+    );
+    if (error) {
+      setDifficulty(prev);
+      showError(error.message, () => void persistDifficulty(next));
+    }
   }
 
   function schedulePosPersist(id: string, x: number, y: number) {
@@ -575,6 +639,8 @@ export function SheetViewer({
             y: d.y,
             attrs: d.attrs,
             circuit_id: d.circuit_id,
+            source: d.source ?? "manual",
+            confidence: d.confidence ?? null,
           }))
         )
       );
@@ -582,6 +648,21 @@ export function SheetViewer({
         setDevices((prev) =>
           prev.filter((d) => !action.devices.some((x) => x.id === d.id))
         );
+        showError(error.message);
+      }
+      return;
+    }
+
+    if (action.kind === "batch_stamp") {
+      // One "Find similar" apply — remove the whole batch as one action.
+      const ids = action.devices.map((d) => d.id);
+      setDevices((prev) => removeBatch(prev, ids));
+      setSelectedIds((prev) => prev.filter((id) => !ids.includes(id)));
+      const { error } = await withWriteTimeout(() =>
+        supabase.from("devices").delete().in("id", ids)
+      );
+      if (error) {
+        setDevices((prev) => [...prev, ...action.devices]);
         showError(error.message);
       }
       return;
@@ -652,6 +733,173 @@ export function SheetViewer({
     setDevices((prev) =>
       prev.map((d) => (d.id === id ? saved : d))
     );
+  }
+
+  // ————— "Find similar" template matching —————
+
+  function candidateChecked(c: MatchCandidate): boolean {
+    const s = symbolSearch;
+    if (!s) return false;
+    return s.overrides[c.id] ?? c.confidence >= s.threshold;
+  }
+
+  function closeSymbolSearch() {
+    matchWorkerRef.current?.terminate();
+    matchWorkerRef.current = null;
+    setSymbolSearch(null);
+    setSymbolApplying(false);
+  }
+
+  useEffect(() => {
+    return () => {
+      matchWorkerRef.current?.terminate();
+      matchWorkerRef.current = null;
+    };
+  }, []);
+
+  /**
+   * Kick off template matching for a user-dragged rect (raster coords).
+   * The sheet raster is captured once — downscaled so the long edge fits
+   * MATCH_MAX_EDGE — and handed to a Web Worker, which lazy-loads the
+   * opencv.js WASM chunk and posts progress. Coordinates come back in
+   * full-res raster space.
+   */
+  function startSymbolSearch(rect: MatchRect) {
+    if (!image) {
+      showError("Sheet image not loaded yet.");
+      return;
+    }
+    const f = downscaleFactor(imageW, imageH, MATCH_MAX_EDGE);
+    let imgData: ImageData;
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(imageW * f));
+      canvas.height = Math.max(1, Math.round(imageH * f));
+      const c2d = canvas.getContext("2d");
+      if (!c2d) throw new Error("no 2d context");
+      c2d.drawImage(image, 0, 0, canvas.width, canvas.height);
+      imgData = c2d.getImageData(0, 0, canvas.width, canvas.height);
+    } catch {
+      showError("Couldn't read sheet pixels for matching — reload and retry.");
+      return;
+    }
+
+    setSymbolSearch({
+      status: "matching",
+      templateRect: rect,
+      progress: null,
+      candidates: [],
+      threshold: DEFAULT_MATCH_THRESHOLD,
+      overrides: {},
+    });
+
+    matchWorkerRef.current?.terminate();
+    const worker = new Worker(
+      new URL("../../workers/symbol-match.worker.ts", import.meta.url)
+    );
+    matchWorkerRef.current = worker;
+    worker.onmessage = (ev: MessageEvent<SymbolMatchResponse>) => {
+      const msg = ev.data;
+      if (msg.type === "progress") {
+        setSymbolSearch((prev) =>
+          prev && prev.status === "matching"
+            ? { ...prev, progress: { done: msg.done, total: msg.total } }
+            : prev
+        );
+      } else if (msg.type === "result") {
+        setSymbolSearch((prev) =>
+          prev
+            ? {
+                ...prev,
+                status: "results",
+                candidates: msg.candidates,
+                overrides: {},
+              }
+            : prev
+        );
+      } else {
+        setSymbolSearch((prev) =>
+          prev ? { ...prev, status: "error", error: msg.message } : prev
+        );
+      }
+    };
+    worker.onerror = () => {
+      setSymbolSearch((prev) =>
+        prev
+          ? { ...prev, status: "error", error: "Matching worker failed." }
+          : prev
+      );
+    };
+    worker.postMessage(
+      {
+        type: "match",
+        image: {
+          data: imgData.data,
+          width: imgData.width,
+          height: imgData.height,
+        },
+        templateRect: {
+          x: rect.x * f,
+          y: rect.y * f,
+          w: rect.w * f,
+          h: rect.h * f,
+        },
+        coordScale: 1 / f,
+      },
+      [imgData.data.buffer]
+    );
+  }
+
+  /**
+   * Stamp every CHECKED candidate as a device of the picked subtype at
+   * its center point (source='template_match', confidence saved). The
+   * whole batch is one undo action.
+   */
+  async function applySymbolMatches(catalogId: string) {
+    const s = symbolSearch;
+    if (!s || s.status !== "results" || symbolApplying) return;
+    const entry = getCatalogEntry(catalogId);
+    if (!entry) return;
+    const chosen = s.candidates.filter((c) => candidateChecked(c));
+    if (!chosen.length) return;
+
+    setSymbolApplying(true);
+    const batch = matchesToDevices(chosen, entry, sheetId, devicesRef.current);
+    setDevices((prev) => [...prev, ...batch]);
+
+    const supabase = createClient();
+    const { data, error } = await withWriteTimeout(() =>
+      supabase
+        .from("devices")
+        .insert(
+          batch.map((d) => ({
+            id: d.id,
+            sheet_id: d.sheet_id,
+            type: d.type,
+            catalog_id: d.catalog_id,
+            x: d.x,
+            y: d.y,
+            attrs: d.attrs,
+            source: d.source,
+            confidence: d.confidence,
+          }))
+        )
+        .select("*")
+    );
+    if (error) {
+      setDevices((prev) => removeBatch(prev, batch.map((d) => d.id)));
+      setSymbolApplying(false);
+      showError(error.message, () => void applySymbolMatches(catalogId));
+      return;
+    }
+    const saved = data as Device[];
+    const savedById = new Map(saved.map((d) => [d.id, d]));
+    setDevices((prev) => prev.map((d) => savedById.get(d.id) ?? d));
+    undoRef.current = { kind: "batch_stamp", devices: saved };
+    setLastCatalogId(entry.id);
+    closeSymbolSearch();
+    selectTool("select");
+    setSelectedIds(saved.map((d) => d.id));
   }
 
   async function deleteSelected() {
@@ -907,6 +1155,14 @@ export function SheetViewer({
       return;
     }
 
+    if (tool === "template") {
+      // Candidate boxes handle their own clicks (toggle check).
+      if (!clickedEmpty) return;
+      templateDragRef.current = { start: pt, active: true };
+      setTemplateDrag({ start: pt, current: pt });
+      return;
+    }
+
     if (pointing) {
       if (!p1) {
         setP1(pt);
@@ -964,6 +1220,10 @@ export function SheetViewer({
     if (lassoRef.current?.active) {
       setLasso({ start: lassoRef.current.start, current: pt });
     }
+
+    if (templateDragRef.current?.active) {
+      setTemplateDrag({ start: templateDragRef.current.start, current: pt });
+    }
   }
 
   function onMouseUp() {
@@ -993,6 +1253,23 @@ export function SheetViewer({
       }
       lassoRef.current = null;
       setLasso(null);
+    }
+
+    if (templateDragRef.current?.active && templateDrag) {
+      templateDragRef.current = null;
+      const rect: MatchRect = {
+        x: Math.min(templateDrag.start.x, templateDrag.current.x),
+        y: Math.min(templateDrag.start.y, templateDrag.current.y),
+        w: Math.abs(templateDrag.current.x - templateDrag.start.x),
+        h: Math.abs(templateDrag.current.y - templateDrag.start.y),
+      };
+      setTemplateDrag(null);
+      const err = validateTemplateRect(rect);
+      if (err) {
+        showError(err);
+        return;
+      }
+      startSymbolSearch(rect);
     }
   }
 
@@ -1085,6 +1362,29 @@ export function SheetViewer({
         h: Math.abs(lasso.current.y - lasso.start.y),
       }
     : null;
+
+  const templateDragRect = templateDrag
+    ? {
+        x: Math.min(templateDrag.start.x, templateDrag.current.x),
+        y: Math.min(templateDrag.start.y, templateDrag.current.y),
+        w: Math.abs(templateDrag.current.x - templateDrag.start.x),
+        h: Math.abs(templateDrag.current.y - templateDrag.start.y),
+      }
+    : null;
+
+  function toggleCandidate(id: string) {
+    setSymbolSearch((prev) => {
+      if (!prev) return prev;
+      const c = prev.candidates.find((x) => x.id === id);
+      if (!c) return prev;
+      const cur = prev.overrides[id] ?? c.confidence >= prev.threshold;
+      return { ...prev, overrides: { ...prev.overrides, [id]: !cur } };
+    });
+  }
+
+  const symbolCheckedCount = symbolSearch
+    ? symbolSearch.candidates.filter((c) => candidateChecked(c)).length
+    : 0;
 
   // Everything shifts down 2.25rem to make room for the pipeline bar.
   const topOffset = calibrated ? "top-[5.25rem]" : "top-[6.25rem]";
@@ -1202,12 +1502,33 @@ export function SheetViewer({
         </button>
         <span className="text-[10px] tabular-nums text-gray-500">{rotation}°</span>
         <span className="h-4 w-px bg-perry-silver" />
+        <span
+          className="flex overflow-hidden rounded border border-perry-silver"
+          title="Labor difficulty (pricing only)"
+        >
+          {([1, 2, 3] as const).map((d) => (
+            <button
+              key={d}
+              type="button"
+              onClick={() => void persistDifficulty(d)}
+              className={`px-1.5 py-1 text-[10px] font-semibold ${
+                difficulty === d
+                  ? "bg-perry-blue text-white"
+                  : "bg-perry-white text-perry-industrial hover:bg-perry-silver/30"
+              }`}
+            >
+              L{d}
+            </button>
+          ))}
+        </span>
+        <span className="h-4 w-px bg-perry-silver" />
         {(
           [
             ["select", "Select"],
             ["pan", "Pan"],
             ["calibrate", "Calibrate"],
             ["measure", "Measure"],
+            ["template", "Find similar"],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -1254,10 +1575,16 @@ export function SheetViewer({
         </div>
       )}
 
-      {(tool === "calibrate" || tool === "measure" || stamping) && (
+      {(tool === "calibrate" ||
+        tool === "measure" ||
+        stamping ||
+        (tool === "template" && !symbolSearch)) && (
         <p className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-md bg-perry-industrial/90 px-3 py-1.5 text-xs text-white">
           {stamping &&
             `Stamp ${stampEntry?.label || lastCatalogId} — click to place · Esc / right-click to exit`}
+          {tool === "template" &&
+            !symbolSearch &&
+            "Drag a box around ONE symbol to find all similar · Esc to exit"}
           {tool === "calibrate" &&
             !calibrateDialogOpen &&
             !calibratePending &&
@@ -1585,10 +1912,101 @@ export function SheetViewer({
                   listening={false}
                 />
               )}
+              {templateDragRect && (
+                <Rect
+                  x={templateDragRect.x}
+                  y={templateDragRect.y}
+                  width={templateDragRect.w}
+                  height={templateDragRect.h}
+                  stroke="#7C3AED"
+                  strokeWidth={1.5 / scale}
+                  dash={[6 / scale, 4 / scale]}
+                  fill="rgba(124,58,237,0.08)"
+                  listening={false}
+                />
+              )}
+              {symbolSearch && (
+                <Rect
+                  x={symbolSearch.templateRect.x}
+                  y={symbolSearch.templateRect.y}
+                  width={symbolSearch.templateRect.w}
+                  height={symbolSearch.templateRect.h}
+                  stroke="#7C3AED"
+                  strokeWidth={2 / scale}
+                  listening={false}
+                />
+              )}
+              {symbolSearch?.status === "results" &&
+                symbolSearch.candidates.map((c) => {
+                  const checked = candidateChecked(c);
+                  return (
+                    <Group key={c.id}>
+                      <Rect
+                        x={c.x}
+                        y={c.y}
+                        width={c.w}
+                        height={c.h}
+                        stroke={checked ? "#2C64F2" : "#9AA1AC"}
+                        strokeWidth={(checked ? 2 : 1.25) / scale}
+                        dash={checked ? undefined : [4 / scale, 3 / scale]}
+                        fill={
+                          checked ? "rgba(44,100,242,0.12)" : "rgba(0,0,0,0.02)"
+                        }
+                        onMouseDown={(e) => {
+                          e.cancelBubble = true;
+                        }}
+                        onClick={(e) => {
+                          e.cancelBubble = true;
+                          toggleCandidate(c.id);
+                        }}
+                      />
+                      <Text
+                        x={c.x}
+                        y={c.y - 14 / scale}
+                        text={c.confidence.toFixed(2)}
+                        fontSize={11 / scale}
+                        fontFamily="Poppins, sans-serif"
+                        fontStyle="bold"
+                        fill={checked ? "#2C64F2" : "#6B7280"}
+                        stroke="#fff"
+                        strokeWidth={2 / scale}
+                        fillAfterStrokeEnabled
+                        listening={false}
+                      />
+                    </Group>
+                  );
+                })}
             </Group>
           </Layer>
         </Stage>
       </div>
+
+      {symbolSearch && (
+        <div className={`absolute right-[19rem] z-30 w-72 ${topOffset}`}>
+          <SymbolSearchPanel
+            search={{
+              status: symbolSearch.status,
+              progress: symbolSearch.progress,
+              candidates: symbolSearch.candidates,
+              threshold: symbolSearch.threshold,
+              error: symbolSearch.error,
+            }}
+            checkedCount={symbolCheckedCount}
+            lastCatalogId={lastCatalogId}
+            applying={symbolApplying}
+            onThreshold={(v) =>
+              setSymbolSearch((prev) =>
+                prev ? { ...prev, threshold: v } : prev
+              )
+            }
+            onApply={(catalogId) => void applySymbolMatches(catalogId)}
+            onCancel={() => {
+              closeSymbolSearch();
+              selectTool("select");
+            }}
+          />
+        </div>
+      )}
 
       <TakeoffSummaryCard summary={takeoffSummary} />
 

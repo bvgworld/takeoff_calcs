@@ -11,6 +11,15 @@ import {
   planLengthFt,
   primMst,
 } from "./routing";
+import {
+  LV_DATA_JACK,
+  LV_EMT_STUB,
+  LV_EMT_STUB_CONNECTOR,
+  LV_FACEPLATE,
+  LV_MUD_RING_1G,
+  LV_PATCH_PANEL_PORT,
+  LV_PULL_STRING,
+} from "./takeoff-items";
 import type {
   Circuit,
   Device,
@@ -312,20 +321,20 @@ export function takeoffThermostats(
   const totalStub = n * stubFt;
   const waste = wasteMult(settings);
   const rows: LvTakeoffLine[] = [];
-  push(rows, "TSTAT", "1-gang mud ring", n, "EA", "Thermostat stubs");
+  push(rows, "TSTAT", LV_MUD_RING_1G, n, "EA", "Thermostat stubs");
   push(
     rows,
     "TSTAT",
-    '3/4" EMT stub',
+    LV_EMT_STUB,
     Math.ceil(totalStub * waste),
     "LF",
     `${n}×${stubFt}ft ×${waste.toFixed(2)}`
   );
-  push(rows, "TSTAT", '3/4" EMT connector', n, "EA", "One per stub");
+  push(rows, "TSTAT", LV_EMT_STUB_CONNECTOR, n, "EA", "One per stub");
   push(
     rows,
     "TSTAT",
-    "Pull string",
+    LV_PULL_STRING,
     Math.ceil(totalStub * waste),
     "LF",
     "Per stub LF"
@@ -448,18 +457,18 @@ export function takeoffData(opts: {
         `Drop ${drop.attrs.label || drop.id.slice(0, 6)} · ${planFt.toFixed(1)}ft`
       );
     }
-    push(rows, "DATA", "1-gang mud ring", 1, "EA", "Per drop");
+    push(rows, "DATA", LV_MUD_RING_1G, 1, "EA", "Per drop");
     push(
       rows,
       "DATA",
-      '3/4" EMT stub',
+      LV_EMT_STUB,
       Math.ceil(stubFt * waste),
       "LF",
       `${stubFt}ft ×${waste.toFixed(2)}`
     );
-    push(rows, "DATA", "Data jack", 1, "EA", "Per drop");
-    push(rows, "DATA", "Faceplate", 1, "EA", "Per drop");
-    push(rows, "DATA", "Patch-panel port", 1, "EA", "Per drop");
+    push(rows, "DATA", LV_DATA_JACK, 1, "EA", "Per drop");
+    push(rows, "DATA", LV_FACEPLATE, 1, "EA", "Per drop");
+    push(rows, "DATA", LV_PATCH_PANEL_PORT, 1, "EA", "Per drop");
   }
 
   for (const idf of idfs) {

@@ -4,6 +4,17 @@ import { resolveCatalogId } from "./devices";
 import { attachLaborHours, type LaborRow } from "./labor";
 import { buildLvTakeoff } from "./lv-routing";
 import { pickMcCable, parseWireLabel, thhnItem } from "./materials";
+import {
+  BRANCH_STRAPS,
+  HALF_INCH_CONNECTORS_COUPLINGS,
+  MC_CABLE_SUPPORTS,
+  MC_CONNECTORS_ANTISHORTS,
+  STRAPS_HANGERS,
+  breakerItem,
+  emtCouplingsItem,
+  emtConnectorsItem,
+  emtItem,
+} from "./takeoff-items";
 import { applyLengthAdders } from "./routing";
 import type {
   Circuit,
@@ -30,11 +41,23 @@ export type TakeoffLine = {
   level?: string;
   discipline?: string;
   sheet?: string;
+  /** Sheet id tag — drives per-sheet difficulty pricing. */
+  sheetId?: string;
   /**
-   * Labor hours (qty × hours_per_uom). undefined = labor join not run;
-   * null = no labor entry for this item (rendered as "—").
+   * Labor hours (qty × hours per uom). undefined = join not run;
+   * null = no assembly hours for this item (rendered as "—").
    */
   hours?: number | null;
+  // Pricing enrichment (set by priceTakeoffLines in pricing.ts) —
+  // display-only, never feeds back into quantities.
+  /** Hours came from the difficulty fallback multiplier (badge). */
+  hours_estimated?: boolean;
+  unit_price?: number | null;
+  ext_price?: number | null;
+  /** Priced via flat override (the "F" badge). */
+  priced_flat?: boolean;
+  /** Sheet difficulty used for this line (1/2/3). */
+  difficulty?: number;
 };
 
 /** Sheet metadata used to tag takeoff lines for grouping/CSV. */
@@ -267,16 +290,16 @@ export function takeoffForCircuit(opts: {
             ? ` (own ${ownHrLen.toFixed(1)})`
             : "") +
           landsNote;
-    push(`${checks.emtSize} EMT`, Math.ceil(hrLen), "LF", shareNote);
+    push(emtItem(checks.emtSize), Math.ceil(hrLen), "LF", shareNote);
     push(
-      `${checks.emtSize} EMT couplings`,
+      emtCouplingsItem(checks.emtSize),
       couplings,
       "EA",
       `ceil(${hrLen.toFixed(0)}/10)-1`
     );
-    push(`${checks.emtSize} EMT connectors`, 2, "EA", "One each end");
+    push(emtConnectorsItem(checks.emtSize), 2, "EA", "One each end");
     push(
-      "One-hole straps / hangers",
+      STRAPS_HANGERS,
       straps,
       "EA",
       `ceil(HR/10)+2`
@@ -306,9 +329,9 @@ export function takeoffForCircuit(opts: {
       `branch+switchleg=${branchLen.toFixed(1)}×${waste.toFixed(2)}` +
         (checks.wireSize !== "#12" ? ` · ${checks.wireSize}` : "")
     );
-    push("MC connectors + anti-shorts", segs * 2, "EA", `2×${segs} segments`);
+    push(MC_CONNECTORS_ANTISHORTS, segs * 2, "EA", `2×${segs} segments`);
     push(
-      "MC cable supports",
+      MC_CABLE_SUPPORTS,
       Math.ceil(branchLen / 6) || 0,
       "EA",
       "Every 6'"
@@ -317,9 +340,9 @@ export function takeoffForCircuit(opts: {
     const brWire = Math.ceil(
       (branchLen + makeup * Math.max(boxCount, 1)) * 3 * waste
     );
-    push(`1/2" EMT`, Math.ceil(branchLen), "LF", "Branch in pipe");
+    push(emtItem('1/2"'), Math.ceil(branchLen), "LF", "Branch in pipe");
     push(
-      `1/2" connectors + couplings`,
+      HALF_INCH_CONNECTORS_COUPLINGS,
       segs * 2 + Math.ceil(branchLen / 10),
       "EA",
       ""
@@ -337,7 +360,7 @@ export function takeoffForCircuit(opts: {
       `(${branchLen.toFixed(1)}+makeup×${boxCount})×3×${waste.toFixed(2)}` +
         brUp
     );
-    push("Straps", Math.ceil(branchLen / 10) + segs, "EA", "");
+    push(BRANCH_STRAPS, Math.ceil(branchLen / 10) + segs, "EA", "");
   }
   // Device assemblies from catalog (per subtype)
   const assemblyDevs = onCkt.filter(
@@ -359,12 +382,7 @@ export function takeoffForCircuit(opts: {
     push(item, v.qty, uom, v.notes);
   });
 
-  push(
-    `${circuit.breaker_amps}A 1-pole breaker + termination`,
-    1,
-    "EA",
-    ""
-  );
+  push(breakerItem(circuit.breaker_amps), 1, "EA", "");
 
   return rows;
 }
@@ -400,6 +418,7 @@ export function buildProjectTakeoff(opts: {
       level: m.level,
       discipline: m.discipline,
       sheet: m.name,
+      sheetId: m.id,
     };
   };
   const byCkt = new Map<string, Route[]>();
@@ -496,6 +515,9 @@ export function rollupTakeoffTotals(lines: TakeoffLine[]): TakeoffLine[] {
       if (l.hours != null) {
         existing.hours = (existing.hours ?? 0) + l.hours;
       }
+      if (l.ext_price != null) {
+        existing.ext_price = (existing.ext_price ?? 0) + l.ext_price;
+      }
     } else {
       map.set(key, {
         circuit: "TOTAL",
@@ -504,6 +526,7 @@ export function rollupTakeoffTotals(lines: TakeoffLine[]): TakeoffLine[] {
         uom: l.uom,
         notes: "Rolled up across circuits",
         ...(l.hours !== undefined ? { hours: l.hours } : {}),
+        ...(l.ext_price !== undefined ? { ext_price: l.ext_price } : {}),
       });
     }
   }
@@ -529,8 +552,14 @@ export function filterTakeoffLines(
   return lines.filter((l) => (l.level ?? "") === filter.level);
 }
 
-export function takeoffToCsv(lines: TakeoffLine[]): string {
-  const header = "level,discipline,sheet,circuit,item,qty,uom,hours,notes";
+export function takeoffToCsv(
+  lines: TakeoffLine[],
+  opts?: { rateTable?: string }
+): string {
+  const header =
+    "level,discipline,sheet,circuit,item,qty,uom,hours,unit_price,ext_price,difficulty,rate_table,notes";
+  const money = (v: number | null | undefined) =>
+    v != null ? Number(v.toFixed(2)) : "";
   const body = lines
     .map((l) =>
       [
@@ -541,7 +570,11 @@ export function takeoffToCsv(lines: TakeoffLine[]): string {
         l.item,
         l.qty,
         l.uom,
-        l.hours != null ? Number(l.hours.toFixed(2)) : "",
+        money(l.hours),
+        money(l.unit_price),
+        money(l.ext_price),
+        l.difficulty ?? "",
+        opts?.rateTable ?? "",
         l.notes,
       ]
         .map((c) => `"${String(c).replace(/"/g, '""')}"`)

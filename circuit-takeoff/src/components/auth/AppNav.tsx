@@ -21,10 +21,10 @@ export function AppNav({ email }: { email?: string | null }) {
           Projects
         </Link>
         <Link
-          href="/labor"
+          href="/estimating"
           className="text-xs font-semibold text-perry-silver hover:text-white"
         >
-          Labor
+          Estimating DB
         </Link>
         <SignOutButton />
       </nav>

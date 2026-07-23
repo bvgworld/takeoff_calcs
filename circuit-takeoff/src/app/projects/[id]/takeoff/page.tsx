@@ -3,10 +3,15 @@ import type { Metadata } from "next";
 import { notFound, redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { AppNav } from "@/components/auth/AppNav";
-import { ExportCsvButton } from "@/components/takeoff/ExportCsvButton";
 import { TakeoffView } from "@/components/takeoff/TakeoffView";
 import { buildProjectTakeoff } from "@/lib/takeoff";
-import type { LaborRow } from "@/lib/labor";
+import { assemblyJoinReport, type Assembly, type AssemblyItem } from "@/lib/estimating";
+import {
+  blendedRate,
+  type Difficulty,
+  type LaborClass,
+  type RateTable,
+} from "@/lib/pricing";
 import type {
   Circuit,
   Device,
@@ -57,12 +62,15 @@ export default async function TakeoffPage({
 
   const { data: sheets } = await supabase
     .from("sheets")
-    .select("id,name,ft_per_px,discipline,level")
+    .select("id,name,ft_per_px,discipline,level,difficulty")
     .eq("project_id", params.id);
 
   const sheetList =
     (sheets as
-      | Pick<Sheet, "id" | "name" | "ft_per_px" | "discipline" | "level">[]
+      | Pick<
+          Sheet,
+          "id" | "name" | "ft_per_px" | "discipline" | "level" | "difficulty"
+        >[]
       | null) || [];
   const sheetIds = sheetList.map((s) => s.id);
   const ftPerPxBySheetId: Record<string, number> = {};
@@ -107,14 +115,63 @@ export default async function TakeoffPage({
     routes = Array.from(byId.values());
   }
 
-  const { data: laborData } = await supabase
-    .from("labor_items")
-    .select("item_key,uom,hours_per_uom")
+  // Estimating DB join — assemblies keyed by normalized name, with item
+  // lists for computed pricing. Hours + prices attach client-side in
+  // TakeoffView (per-sheet difficulty changes live, no re-route).
+  const { data: asmData } = await supabase
+    .from("assemblies")
+    .select(
+      "name,name_normalized,uom,hours_l1,hours_l2,hours_l3,pricing_mode,flat_price, assembly_items(item_id,qty_per_uom)"
+    )
     .eq("user_id", user.id);
-  const laborItems = (laborData as LaborRow[] | null) || [];
-  const laborEnabled = laborItems.length > 0;
+  const assemblies =
+    (asmData as
+      | (Pick<
+          Assembly,
+          | "name"
+          | "name_normalized"
+          | "uom"
+          | "hours_l1"
+          | "hours_l2"
+          | "hours_l3"
+          | "pricing_mode"
+          | "flat_price"
+        > & { assembly_items: Pick<AssemblyItem, "item_id" | "qty_per_uom">[] })[]
+      | null) || [];
+  const laborEnabled = assemblies.length > 0;
 
-  const { lines, totals } = buildProjectTakeoff({
+  const { data: itemsData } = await supabase
+    .from("items")
+    .select("id,uom,cost_per_uom")
+    .eq("user_id", user.id);
+  const items =
+    (itemsData as
+      | { id: string; uom: "EA" | "LF" | "100LF"; cost_per_uom: number }[]
+      | null) || [];
+
+  // Rate table: project setting wins, else the default table, else first.
+  const { data: rtData } = await supabase
+    .from("rate_tables")
+    .select("*")
+    .eq("user_id", user.id)
+    .order("created_at", { ascending: true });
+  const rateTables = (rtData as RateTable[] | null) || [];
+  const rateTable =
+    rateTables.find((t) => t.id === settings.rate_table_id) ||
+    rateTables.find((t) => t.is_default) ||
+    rateTables[0] ||
+    null;
+
+  let blended = null;
+  if (rateTable) {
+    const { data: lcData } = await supabase
+      .from("labor_classes")
+      .select("*")
+      .eq("rate_table_id", rateTable.id);
+    blended = blendedRate((lcData as LaborClass[] | null) || []);
+  }
+
+  const { lines } = buildProjectTakeoff({
     circuits,
     devices,
     routes,
@@ -126,10 +183,22 @@ export default async function TakeoffPage({
       discipline: s.discipline ?? "power",
       level: s.level ?? "",
     })),
-    ...(laborEnabled ? { laborItems } : {}),
   });
 
-  const csvRows = [...lines, ...totals];
+  const joinReport = laborEnabled
+    ? assemblyJoinReport(lines, assemblies)
+    : { missingKeys: [], computedNoHours: [] };
+
+  const sheetDifficulty = Object.fromEntries(
+    sheetList.map((s) => [
+      s.id,
+      {
+        name: s.name,
+        difficulty: ((s.difficulty ?? 1) as Difficulty) || 1,
+      },
+    ])
+  );
+
   const safeName = p.name.replace(/[^\w.-]+/g, "_").slice(0, 48);
   const hasContent = lines.length > 0;
 
@@ -154,10 +223,6 @@ export default async function TakeoffPage({
               %
             </p>
           </div>
-          <ExportCsvButton
-            lines={csvRows}
-            filename={`${safeName}_takeoff.csv`}
-          />
         </div>
 
         {!hasContent ? (
@@ -180,8 +245,16 @@ export default async function TakeoffPage({
         ) : (
           <TakeoffView
             lines={lines}
-            grandTotals={totals}
             laborEnabled={laborEnabled}
+            joinReport={joinReport}
+            csvFilename={`${safeName}_takeoff.csv`}
+            pricing={{
+              assemblies,
+              items,
+              blended,
+              rateTableName: rateTable?.name ?? null,
+              sheets: sheetDifficulty,
+            }}
           />
         )}
       </main>

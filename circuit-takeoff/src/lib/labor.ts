@@ -1,10 +1,30 @@
 /**
  * Labor foundation — per-user labor units joined onto takeoff lines by
- * item_key (exact takeoff item name). Display-only: qty × hours_per_uom.
+ * normalized item key. Display-only: qty × hours_per_uom.
  * No crew rates, difficulty factors, or pricing (Phase 3+).
  */
 
 import type { TakeoffLine } from "./takeoff";
+
+/**
+ * ONE normalize function applied on BOTH sides of the labor join (saving
+ * a library entry AND computing hours). Defeats the exact-string traps:
+ * unicode quote variants (smart quotes / primes), stray whitespace, case.
+ * Must stay in sync with the SQL backfill in migration 012.
+ */
+export function normalizeItemKey(s: string): string {
+  return s
+    .replace(/[\u201C\u201D\u2033]/g, '"') // “ ” ″ → "
+    .replace(/[\u2018\u2019\u2032]/g, "'") // ‘ ’ ′ → '
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+/** UOM comparison is whitespace/case-insensitive ("LF" ≡ " lf "). */
+export function normalizeUom(s: string): string {
+  return s.trim().toUpperCase();
+}
 
 export type LaborSource = "company" | "licensed";
 
@@ -25,13 +45,16 @@ export type LaborRow = {
   hours_per_uom: number;
 };
 
+/** Map keyed by normalized item key (the join side for library entries). */
 export function laborMapByKey(items: LaborRow[]): Map<string, LaborRow> {
-  return new Map(items.map((i) => [i.item_key, i]));
+  return new Map(items.map((i) => [normalizeItemKey(i.item_key), i]));
 }
 
 /**
  * Attach hours to takeoff lines: qty × hours_per_uom when the item has a
- * labor entry, null when it doesn't (rendered as "—").
+ * labor entry whose UOM also matches, null otherwise (rendered as "—").
+ * A key match with a different UOM (LF vs EA) does NOT join silently —
+ * laborJoinReport surfaces it as a mismatch instead.
  */
 export function attachLaborHours<T extends TakeoffLine>(
   lines: T[],
@@ -39,22 +62,15 @@ export function attachLaborHours<T extends TakeoffLine>(
 ): T[] {
   const map = laborMapByKey(items);
   return lines.map((l) => {
-    const entry = map.get(l.item);
-    return { ...l, hours: entry ? l.qty * entry.hours_per_uom : null };
+    const entry = map.get(normalizeItemKey(l.item));
+    return {
+      ...l,
+      hours:
+        entry && normalizeUom(entry.uom) === normalizeUom(l.uom)
+          ? l.qty * entry.hours_per_uom
+          : null,
+    };
   });
-}
-
-/** Distinct item names that have no labor entry ("14 items have no labor value"). */
-export function unmatchedLaborItems(
-  lines: TakeoffLine[],
-  items: LaborRow[]
-): string[] {
-  const map = laborMapByKey(items);
-  const missing = new Set<string>();
-  for (const l of lines) {
-    if (!map.has(l.item)) missing.add(l.item);
-  }
-  return Array.from(missing).sort((a, b) => a.localeCompare(b));
 }
 
 /** Sum of non-null hours across lines. */
@@ -70,7 +86,8 @@ export function totalLaborHours(lines: { hours?: number | null }[]): number {
 
 const CSV_HEADER = "item_key,uom,hours_per_uom";
 
-function csvField(v: string | number): string {
+/** Quote a CSV field when needed (shared with estimating CSVs). */
+export function csvField(v: string | number): string {
   const s = String(v);
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
@@ -86,8 +103,8 @@ export function laborToCsv(items: LaborRow[]): string {
   return `${CSV_HEADER}\n${body}\n`;
 }
 
-/** Split one CSV line honoring quotes and "" escapes. */
-function splitCsvLine(line: string): string[] {
+/** Split one CSV line honoring quotes and "" escapes (shared with estimating CSVs). */
+export function splitCsvLine(line: string): string[] {
   const out: string[] = [];
   let cur = "";
   let inQuotes = false;
@@ -154,7 +171,8 @@ export function parseLaborCsv(text: string): LaborCsvResult {
       errors.push(`Line ${idx + 1}: bad hours_per_uom "${hoursRaw}"`);
       return;
     }
-    rows.set(item_key, { item_key, uom, hours_per_uom: hours });
+    // Dedupe by normalized key so "1/2” EMT" and '1/2" EMT' collapse.
+    rows.set(normalizeItemKey(item_key), { item_key, uom, hours_per_uom: hours });
   });
 
   return { rows: Array.from(rows.values()), errors };

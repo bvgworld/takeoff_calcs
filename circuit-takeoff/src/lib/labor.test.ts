@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 import {
   attachLaborHours,
   laborToCsv,
+  normalizeItemKey,
   parseLaborCsv,
   totalLaborHours,
-  unmatchedLaborItems,
   type LaborRow,
 } from "./labor";
 import {
@@ -63,15 +63,30 @@ describe("labor join math", () => {
   });
 });
 
-describe("unmatched item count", () => {
-  it("counts distinct items with no labor entry", () => {
-    const unmatched = unmatchedLaborItems(LINES, LABOR);
-    expect(unmatched).toEqual(["#12 THHN", "20A 1-pole breaker"]);
-    expect(unmatched.length).toBe(2);
+describe("normalized join (one normalize function, both sides)", () => {
+  it("smart-quote entry matches straight-quote takeoff item", () => {
+    const smart: LaborRow[] = [
+      { item_key: "1/2\u201D EMT", uom: "LF", hours_per_uom: 0.25 },
+    ];
+    const withHours = attachLaborHours(LINES, smart);
+    expect(withHours[0].hours).toBeCloseTo(50 * 0.25);
   });
 
-  it("no labor items at all → every distinct item is unmatched", () => {
-    expect(unmatchedLaborItems(LINES, []).length).toBe(4);
+  it("trailing space and case differences match", () => {
+    const sloppy: LaborRow[] = [
+      { item_key: '  1/2" emt ', uom: "LF", hours_per_uom: 0.25 },
+    ];
+    expect(attachLaborHours(LINES, sloppy)[0].hours).toBeCloseTo(12.5);
+    expect(normalizeItemKey('  1/2\u201D  EMT ')).toBe(
+      normalizeItemKey('1/2" emt')
+    );
+  });
+
+  it("UOM mismatch is NOT joined silently", () => {
+    const wrongUom: LaborRow[] = [
+      { item_key: '1/2" EMT', uom: "EA", hours_per_uom: 0.25 },
+    ];
+    expect(attachLaborHours(LINES, wrongUom)[0].hours).toBeNull();
   });
 });
 
@@ -107,7 +122,7 @@ describe("takeoff CSV hours column", () => {
     const csv = takeoffToCsv(attachLaborHours(LINES, LABOR));
     const [header, row1, , , , row5] = csv.replace("\uFEFF", "").split("\n");
     expect(header).toBe(
-      "level,discipline,sheet,circuit,item,qty,uom,hours,notes"
+      "level,discipline,sheet,circuit,item,qty,uom,hours,unit_price,ext_price,difficulty,rate_table,notes"
     );
     expect(row1).toContain('"50","LF","2"');
     expect(row5).toContain('"1","EA","",');

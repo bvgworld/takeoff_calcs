@@ -95,6 +95,9 @@ export default async function SheetPage({
       initialFtPerPx={s.ft_per_px}
       initialRotation={normalizeRotation(s.rotation ?? 0)}
       initialRenderDpi={s.render_dpi ?? null}
+      initialDifficulty={
+        s.difficulty === 2 || s.difficulty === 3 ? s.difficulty : 1
+      }
       settings={(p.settings as ProjectSettings) || DEFAULT_SETTINGS}
       title={`${p.name} · ${s.name}`}
       backHref={`/projects/${p.id}`}

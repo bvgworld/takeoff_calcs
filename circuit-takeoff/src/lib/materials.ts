@@ -16,6 +16,7 @@ import {
   type ConduitSize,
   type WireSize,
 } from "./nec-tables";
+import { mcCableItem } from "./takeoff-items";
 
 export type ConductorGroup = { size: WireSize; count: number };
 
@@ -143,7 +144,7 @@ export function pickMcCable(
     const [awg, cnt] = s.split("/");
     return awg === wireSize && Number(cnt) === n;
   });
-  if (candidates.length) return `${candidates[0]} MC cable`;
+  if (candidates.length) return mcCableItem(candidates[0]);
 
   // Prefer same AWG with closest conductor count, else nearest smaller AWG /2
   const sameAwg = MC_SKUS.filter((s) => s.startsWith(`${wireSize}/`));
@@ -153,7 +154,7 @@ export function pickMcCable(
       const db = Math.abs(Number(b.split("/")[1]) - n);
       return db < da ? b : a;
     });
-    return `${best} MC cable`;
+    return mcCableItem(best);
   }
 
   // Walk up sizes until we find a /2
@@ -161,10 +162,10 @@ export function pickMcCable(
   for (let i = Math.max(idx, 0); i < WIRE_SIZES.length; i++) {
     const sku = `${WIRE_SIZES[i]}/2` as McSku;
     if ((MC_SKUS as readonly string[]).includes(sku)) {
-      return `${sku} MC cable`;
+      return mcCableItem(sku);
     }
   }
-  return "12/2 MC cable";
+  return mcCableItem("12/2");
 }
 
 export function thhnItem(wireSize: WireSize): string {

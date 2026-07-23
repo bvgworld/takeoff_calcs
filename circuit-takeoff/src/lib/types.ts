@@ -15,6 +15,8 @@ export type ProjectSettings = {
   receptacle_voltage: number;
   /** LV stub length (thermostat / data drops), feet. */
   lv_stub_ft: number;
+  /** Rate table for pricing; null = the user's default table. */
+  rate_table_id?: string | null;
 };
 
 export const DEFAULT_SETTINGS: ProjectSettings = {
@@ -73,6 +75,8 @@ export type Sheet = {
   /** Storage path of the shared plan-set PDF (one per upload). */
   source_pdf_path?: string | null;
   sort_order: number;
+  /** Labor difficulty level 1/2/3 (pricing only, default 1). */
+  difficulty?: number;
   created_at: string;
 };
 
@@ -96,6 +100,10 @@ export type Device = {
   attrs: DeviceAttrs;
   circuit_id: string | null;
   created_at: string;
+  /** How the device was created (migration 014). */
+  source?: "manual" | "template_match";
+  /** Template-match confidence 0–1; null for manual stamps. */
+  confidence?: number | null;
 };
 
 export type CircuitType = "lighting" | "receptacle";
